@@ -29,3 +29,20 @@ Vercel:
 - HTTP 429, 408, 500, 502, 503, 504, quota, rate, timeout, and temporary failures are placed in a pending queue.
 - Pending batches are retried at the end instead of failing the entire load.
 - The UI shows loaded, total, pending, and current queue status.
+
+## Clickable company project count
+- The Projects number in Company Directory is now a button.
+- Clicking it opens a Project Associations dialog.
+- The dialog lists project name, status, classification, member count, and project ID.
+- If member details are available, they are included in the Excel export.
+- Project associations can be exported to Excel.
+
+
+## Performance and project audit
+- Company and membership pages load 200 records at a time.
+- The client pauses 5 seconds between requests.
+- Retryable quota batches remain pending and are retried at the end.
+- The generic Edit/Rename action was removed from Company Directory.
+- Missing ERP and Tax buttons remain available.
+- Clicking the project count opens a project/company/member audit with project names, company status, member status, and deleted/inactive indicators when returned by Autodesk.
+- The audit exports to Excel.
