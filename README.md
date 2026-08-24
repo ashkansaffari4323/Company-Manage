@@ -21,3 +21,12 @@ Vercel settings:
 - Framework: Other
 - Build command: npm run build
 - Output directory: client/dist
+
+
+## User-centric removal flow
+- Select one hub user.
+- List every accessible project where that user is a member.
+- Select multiple projects and remove access.
+- Remove access from all listed projects.
+- Account-level user removal is enabled only after no project memberships remain and requires typing REMOVE USER.
+- Project removal uses the signed-in Hub Admin token and is supported for ACC/Forma project writes, not BIM 360 project writes.
