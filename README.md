@@ -1,15 +1,24 @@
-# ACC Company Manager - Hub Admin All Data
+# Company Manage Complete
 
-This build uses the signed-in Autodesk user's access for directory reads, company edits, image upload, and project listing. The app cannot grant permissions beyond the Autodesk role assigned to that user.
+One clean Vercel-ready build with a single API function.
 
 Features:
-- Fetches all company pages, not only the first 200
-- Search by company name, trade, ERP ID, or Tax ID
-- Filters: no ERP ID, no Tax ID, no members, and status
-- Company image upload
-- Rename, edit trade, ERP ID, and Tax ID / ABN
-- Per-company and bulk patch purge
-- Lists all projects returned to the signed-in Hub Admin, including archived and template classifications when Autodesk returns them
-- Excel export for companies, projects, import reports, purge previews, and purge results
-- No raw API JSON in the UI
-- 11 API functions, below the Vercel Hobby limit
+- Autodesk Connect and Sign out
+- Name-only company import, optional trade
+- Full company pagination beyond 200 records
+- Working No ERP ID, No Tax ID, and No members filters
+- Add ERP ID or Tax ID directly from filtered rows
+- Edit and rename companies
+- Upload company images
+- Individual and selected zero-member company purge
+- Multi-project selection
+- Multi-user membership selection across projects
+- Bulk role update or access removal for supported ACC/Forma projects
+- Human-readable reports and Excel exports
+- No raw API reports
+
+Vercel:
+- Framework: Other
+- Build: npm run build
+- Output: client/dist
+- API functions: 1

@@ -1,1 +1,1 @@
-{"name":"company-upload-modern","private":true,"scripts":{"build":"npm install --prefix client && npm run build --prefix client"},"dependencies":{"axios":"^1.7.0"}}
+{"name":"company-manage-complete","private":true,"scripts":{"build":"npm install --prefix client && npm run build --prefix client"},"dependencies":{"axios":"^1.7.0"}}
