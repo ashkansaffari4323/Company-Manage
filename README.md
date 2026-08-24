@@ -1,19 +1,16 @@
-# Company Manage Full v21
+# Company Manage Full v23
 
 Complete replacement ZIP. No patch scripts.
 
-## Company Directory corrections
-- The multi-company rename action is labelled **Auto Rename**.
-- The operator enters only the desired prefix. Selected companies are renamed as `<prefix> 1`, `<prefix> 2`, `<prefix> 3`, and so on.
-- Auto Rename updates the loaded directory in memory and does not reload all companies from Autodesk.
-- Remove Members + Purge updates the loaded directory in memory and does not reload all companies.
-- The only operation that starts a complete company load is the explicit **Load All** button or a deliberate status reload.
+## User Removal correction
+- Selecting a Hub user now immediately opens a stable selected-user panel.
+- The panel shows name, email, company, status, and project-loading progress.
+- Projects are scanned in small pages so the Vercel function does not time out.
+- The project list appears only after 100% of accessible projects have been checked.
+- User matching supports account user ID, Autodesk ID, and email.
+- Select one or multiple projects and remove the user from those projects.
+- Remove the user from all accessible projects.
+- After no accessible project memberships remain, type `REMOVE USER` and attempt Hub removal.
+- All results are written to Reports.
 
-## Purge behaviour
-- Finds accessible project-user memberships assigned to each selected company.
-- Removes those memberships from supported ACC/Forma projects.
-- Attempts to mark the company deleted through the Autodesk company endpoint.
-- Leaves failed companies visible and records every success/failure in Reports.
-- Legacy BIM 360 project-user removals may be unsupported and will be reported.
-
-All v20 features remain included: stable 100%-complete audit view, member removal in the audit, search fields, company filters, full Excel template, 500-record logical cycles, pending retry, authentication, user workflows, and one Vercel function.
+All v22 features remain included: 1,000-company logical groups, five-second pauses, Hub users in safe 100-user pages grouped by 500, company filters, audits, ERP/Tax, bulk rename, deep purge, full import template, authentication, and one Vercel API function.
