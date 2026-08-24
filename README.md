@@ -1,18 +1,16 @@
-# Company Manage Full v25
+# Company Manage Full v26
 
-Complete replacement ZIP. No PowerShell patch scripts.
+Complete replacement ZIP. No patch scripts.
 
-## Restored Users & Access list
-- The project-user list remains visible after loading users from selected projects.
-- Search users by name, email, company, role, or project.
-- Select individual users or select all filtered users.
-- Change roles or remove selected project memberships.
+## Users & Access correction
+- Load Users now sends the selected projects to one backend action.
+- The backend loads users from selected projects in controlled parallel groups and returns one combined membership list.
+- The user list remains visible and supports search, individual selection, select-all-filtered, role changes, and removal.
 
-## Instant company Members / Projects audit
-- Clicking a company Members or Projects count sends one audit request.
-- No staged project pages, no five-second gap, and no repeated modal redraw.
-- The server loads the account project list once, scans project users in controlled parallel groups, and returns one final response.
-- The UI shows one stable loading panel, then one final audit view.
-- Members can be selected and removed from projects from the final view.
+## Fast selected Hub user lookup
+- Select User uses the Autodesk account-user-projects endpoint rather than scanning every project.
+- The selected user panel opens immediately with name, email, company, and status.
+- Project memberships usually return in one request.
+- Remove from selected projects, remove from all projects, and delete from Hub remain available.
 
-The full company directory loader still uses safe 1,000-company logical groups with a five-second gap, and Hub users still use safe 100-user pages grouped by 500.
+All v25 features remain included.
