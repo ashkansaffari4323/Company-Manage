@@ -1,1 +1,0 @@
-const{axios,APS,user,account,error}=require('../../lib/_lib');module.exports=async(q,s)=>{try{const t=await user(q),r=await axios.get(`${APS}/project/v1/hubs`,{headers:{Authorization:`Bearer ${t}`}});s.json({hubs:(r.data.data||[]).map(h=>({id:h.id,name:h.attributes?.name||h.id,accountId:account(h.id)}))})}catch(e){error(s,e)}};

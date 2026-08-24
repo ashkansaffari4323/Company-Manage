@@ -1,1 +1,0 @@
-const{axios,APS,token,account,error}=require('../../lib/_lib');module.exports=async(q,s)=>{try{const t=await token('account:read'),r=await axios.get(`${APS}/hq/v1/accounts/${account(q.query.hubId)}/companies/${q.query.companyId}`,{headers:{Authorization:`Bearer ${t}`}});s.json({company:r.data})}catch(e){error(s,e)}};

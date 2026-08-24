@@ -1,1 +1,0 @@
-const{cfg,APS,error}=require('../../lib/_lib');module.exports=(q,s)=>{try{cfg();const u=new URL(`${APS}/authentication/v2/authorize`);u.search=new URLSearchParams({response_type:'code',client_id:process.env.APS_CLIENT_ID,redirect_uri:process.env.APS_CALLBACK_URL,scope:'data:read account:read account:write'});s.json({url:u.toString()})}catch(e){error(s,e)}};
