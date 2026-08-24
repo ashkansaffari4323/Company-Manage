@@ -1,13 +1,18 @@
-# Company Manage Full v24
+# Company Manage Full v25
 
-Complete replacement ZIP. No patch scripts.
+Complete replacement ZIP. No PowerShell patch scripts.
 
-## Fast company Members / Projects audit
-- Clicking a company Members or Projects count opens immediately.
-- This audit does not use the five-second company-directory batching delay.
-- Projects are scanned in large pages and project-user requests run in controlled parallel groups.
-- No artificial wait is added between audit pages.
-- The final tables still appear only after 100% of accessible projects have been checked.
-- Members can be selected and removed from projects in the completed audit.
+## Restored Users & Access list
+- The project-user list remains visible after loading users from selected projects.
+- Search users by name, email, company, role, or project.
+- Select individual users or select all filtered users.
+- Change roles or remove selected project memberships.
 
-The 1,000-company directory loader and 500-user logical loader retain their five-second group gaps. All v23 features remain included.
+## Instant company Members / Projects audit
+- Clicking a company Members or Projects count sends one audit request.
+- No staged project pages, no five-second gap, and no repeated modal redraw.
+- The server loads the account project list once, scans project users in controlled parallel groups, and returns one final response.
+- The UI shows one stable loading panel, then one final audit view.
+- Members can be selected and removed from projects from the final view.
+
+The full company directory loader still uses safe 1,000-company logical groups with a five-second gap, and Hub users still use safe 100-user pages grouped by 500.
