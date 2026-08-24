@@ -1,4 +1,4 @@
-# Company Manage Full v15
+# Company Manage Full v16 Auth Fixed
 
 Complete replacement build. No patch scripts.
 
@@ -15,3 +15,9 @@ Complete replacement build. No patch scripts.
 - Excel/CSV exports
 
 Vercel: Framework Other, Build `npm run build`, Output `client/dist`.
+
+
+## Authentication correction
+- The `/callback` route now exchanges the Autodesk authorization code before loading the application.
+- After successful exchange, the browser returns to `/`, reads the secure session cookie, and fetches hubs.
+- OAuth errors are displayed on the callback screen instead of silently returning to a disconnected app.
