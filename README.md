@@ -22,3 +22,10 @@ Vercel:
 - Build: npm run build
 - Output: client/dist
 - API functions: 1
+
+## Smart quota queue
+- Company and user data load in batches of 50.
+- The client waits 10 seconds between batches.
+- HTTP 429, 408, 500, 502, 503, 504, quota, rate, timeout, and temporary failures are placed in a pending queue.
+- Pending batches are retried at the end instead of failing the entire load.
+- The UI shows loaded, total, pending, and current queue status.
