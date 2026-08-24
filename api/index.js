@@ -3,6 +3,7 @@ async function allCompanies(aid,t,status='all'){let all=[],offset=0,total=1;whil
 module.exports=async(req,res)=>{try{const a=String(req.query.action||'');
 if(a==='auth-login'){cfg();const u=new URL(`${APS}/authentication/v2/authorize`);u.search=new URLSearchParams({response_type:'code',client_id:process.env.APS_CLIENT_ID,redirect_uri:process.env.APS_CALLBACK_URL,scope:'data:read account:read account:write'});return res.json({url:u.toString()})}
 if(a==='auth-callback'){const b=new URLSearchParams({grant_type:'authorization_code',code:req.query.code,redirect_uri:process.env.APS_CALLBACK_URL}),r=await axios.post(`${APS}/authentication/v2/token`,b,{headers:{Authorization:`Basic ${basic()}`,'Content-Type':'application/x-www-form-urlencoded'}});cookie(res,enc({access_token:r.data.access_token,refresh_token:r.data.refresh_token}));return res.json({ok:true})}
+if(a==='auth-logout'){res.setHeader('Set-Cookie','autodesk_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0');return res.json({authenticated:false})}
 if(a==='auth-status')return res.json({authenticated:!!session(req)});
 if(a==='hubs'){const t=await user(req),r=await axios.get(`${APS}/project/v1/hubs`,{headers:{Authorization:`Bearer ${t}`}});return res.json({hubs:(r.data.data||[]).map(h=>({id:h.id,name:h.attributes?.name||h.id,accountId:account(h.id)}))})}
 if(a==='companies-existing'){const aid=account(req.query.hubId),t=await user(req),all=await allCompanies(aid,t,'active');return res.json({companies:all.map(c=>({id:c.id,name:c.name,trade:c.trade,status:c.status}))})}
