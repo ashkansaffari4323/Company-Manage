@@ -1,12 +1,17 @@
-Fix for: Only support 2 legged access token
+Fixes the User Project Removal 404 error and increases hub-user loading.
 
 Cause:
-The legacy HQ company-detail endpoint was being called with the signed-in 3-legged user token.
+The app used /construction/admin/v1/accounts/{accountId}/users, but account-level users are served by the HQ account-users endpoint.
 
 Fix:
-- HQ company detail uses a two-legged account:read token.
-- ACC Admin project and project-user reads continue using the signed-in user token.
-- Keeps exactly one Vercel API function.
+- Uses /hq/v1/accounts/{accountId}/users
+- Uses a two-legged account:read token
+- Requests up to 500 users per page
+- Falls back to 200 if Autodesk rejects a 500-item page
+- Waits five seconds between pages
+- Moves quota/temporary failures to Pending
+- Retries Pending pages at the end
+- Keeps one Vercel function
 
-Extract into repository root and run:
-powershell -ExecutionPolicy Bypass -File .\apply-company-projects-2leg-fix.ps1
+Run from repository root:
+powershell -ExecutionPolicy Bypass -File .\apply-hub-users-500-fix.ps1
