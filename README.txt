@@ -1,11 +1,18 @@
-Corrected authentication fix. This version avoids PowerShell quoting errors.
+Latest Company Manage feature patch
 
-Extract both files into the repository root, then run:
+Changes:
+- Removes All Projects navigation page
+- Adds Users & Access page
+- Select one project and multiple users
+- Bulk role change or remove project access
+- Company Directory still fetches all company pages
+- No ERP, No Tax, and No Members checkboxes reload the filtered list automatically
+- Keeps company rename, ERP/Tax editing, image upload, and purge
+- Keeps exactly one Vercel API function
 
-powershell -ExecutionPolicy Bypass -File .\apply-auth-fix-v2.ps1
+Important limitations:
+- Autodesk does not currently expose a project-delete API for this workflow.
+- Project user write actions are supported for Forma/ACC projects; BIM 360 project writes are not compatible.
 
-Expected result:
-Authentication fix applied successfully.
-API function count: 1
-
-Then commit and push to origin/main.
+Extract into repository root and run:
+powershell -ExecutionPolicy Bypass -File .\apply-access-manager.ps1
