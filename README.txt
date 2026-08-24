@@ -1,18 +1,12 @@
-Latest Company Manage feature patch
+Fix for: Only support 2 legged access token
 
-Changes:
-- Removes All Projects navigation page
-- Adds Users & Access page
-- Select one project and multiple users
-- Bulk role change or remove project access
-- Company Directory still fetches all company pages
-- No ERP, No Tax, and No Members checkboxes reload the filtered list automatically
-- Keeps company rename, ERP/Tax editing, image upload, and purge
-- Keeps exactly one Vercel API function
+Cause:
+The legacy HQ company-detail endpoint was being called with the signed-in 3-legged user token.
 
-Important limitations:
-- Autodesk does not currently expose a project-delete API for this workflow.
-- Project user write actions are supported for Forma/ACC projects; BIM 360 project writes are not compatible.
+Fix:
+- HQ company detail uses a two-legged account:read token.
+- ACC Admin project and project-user reads continue using the signed-in user token.
+- Keeps exactly one Vercel API function.
 
 Extract into repository root and run:
-powershell -ExecutionPolicy Bypass -File .\apply-access-manager.ps1
+powershell -ExecutionPolicy Bypass -File .\apply-company-projects-2leg-fix.ps1
