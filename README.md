@@ -1,23 +1,20 @@
-# Company Manage Full v16 Auth Fixed
+# Company Manage Full v19
 
-Complete replacement build. No patch scripts.
+Complete replacement ZIP. No patch scripts.
 
-- One Vercel API function
-- Autodesk Connect and Sign out
-- Company page loading: 200 records, 5-second gap, pending retry
-- Hub-user loading: requests 500, automatic fallback to 200, 5-second gap, pending retry
-- No ERP, No Tax, No Members and status filters
-- Direct ERP/Tax maintenance, image upload and zero-member purge
-- Clickable Members and Projects audit
-- Two-legged HQ requests, three-legged ACC project/user requests
-- Multi-project/multi-user access manager
-- Select one hub user, remove from selected/all projects, then attempt Hub removal
-- Excel/CSV exports
+## Company Directory upgrades
+- ERP and Tax actions open separate, focused forms.
+- Member/project audit dialog opens immediately, then loads progressively in small project pages.
+- Search boxes on company, project, membership, hub-user, selected-user-project, and audit lists.
+- Select companies and run **Remove Members + Purge Companies**.
+- Select multiple companies and rename sequentially as `Not integrated company 1`, `Not integrated company 2`, and so on.
 
-Vercel: Framework Other, Build `npm run build`, Output `client/dist`.
+## Loading
+- Company groups: 500 records, using safe 200 + 200 + 100 requests, then a 5-second pause.
+- Hub-user groups: 500 records, using five safe 100-user requests, then a 5-second pause.
+- Retryable failures remain Pending and retry at the end.
 
-
-## Authentication correction
-- The `/callback` route now exchanges the Autodesk authorization code before loading the application.
-- After successful exchange, the browser returns to `/`, reads the secure session cookie, and fetches hubs.
-- OAuth errors are displayed on the callback screen instead of silently returning to a disconnected app.
+## Safety and API limits
+- Project-user removal uses signed-in ACC/Forma admin access. Autodesk does not support this write operation for legacy BIM 360 projects.
+- Company deletion is attempted only after accessible associated project users are removed; unsupported or inaccessible associations are reported rather than hidden.
+- One Vercel API function.
