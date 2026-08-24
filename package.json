@@ -1,1 +1,1 @@
-{"name":"company-upload-final","version":"5.0.0","private":true,"scripts":{"dev":"npm run dev --prefix client","vercel-dev":"vercel dev","build":"npm install --prefix client && npm run build --prefix client"},"dependencies":{"@vercel/node":"latest","axios":"^1.6.8"},"devDependencies":{"vercel":"latest"}}
+{"name":"company-upload-latest","private":true,"scripts":{"build":"npm install --prefix client && npm run build --prefix client"},"dependencies":{"axios":"^1.7.0"}}

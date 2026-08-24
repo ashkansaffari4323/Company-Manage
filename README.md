@@ -1,22 +1,17 @@
-# Company Upload Final
+# Company Upload Latest
 
-Latest complete Vercel-ready Autodesk ACC/BIM 360 company upload app.
+Complete Vercel-ready build.
 
-## Included fixes
+Features:
+- Name-only mandatory Excel validation
+- Optional trade with default
+- Existing-name and Excel-duplicate detection
+- Browser-controlled batches of 50
+- Added Companies report without ERP or Tax columns
+- Companies list without ERP or Tax columns
+- Edit dialog for rename, trade, ERP ID and Tax ID/ABN
+- Per-company patch purge
+- Bulk zero-member patch purge
+- 11 API functions, within the 12-function Hobby deployment limit
 
-- Vercel Hobby compatible: 12 API functions only.
-- Shared helper moved to `/lib/_lib.js`, not `/api/_lib.js`.
-- Large Excel imports are browser-controlled batches of 50 companies via `/api/companies/import-batch`.
-- Only **Name** is mandatory in Excel validation.
-- Trade is optional in Excel. Backend sends a safe default trade if Excel trade is blank/0/N/A.
-- Company creation sends only `name` and `trade` to Autodesk, avoiding country/state/phone/ABN validation errors.
-- Validation checks existing hub companies and duplicate names inside Excel.
-- Hub Admin supports company list/filter, company detail, company image upload, project list.
-- Purge uses PATCH, not DELETE, for zero-member companies.
-
-## Vercel settings
-
-Framework Preset: Other
-Install Command: npm install
-Build Command: npm run build
-Output Directory: client/dist
+Replace the old repository contents instead of extracting over old files.

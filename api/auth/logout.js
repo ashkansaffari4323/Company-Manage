@@ -1,1 +1,1 @@
-const{clearCookie}=require('../../lib/_lib');module.exports=(req,res)=>{clearCookie(res,'autodesk_session');res.json({authenticated:false})};
+module.exports=(q,s)=>{s.setHeader('Set-Cookie','autodesk_session=; Path=/; Max-Age=0');s.json({authenticated:false})};
