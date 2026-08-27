@@ -1,1 +1,1 @@
-const fs=require('fs');fs.rmSync('client/dist',{recursive:true,force:true});fs.mkdirSync('client/dist',{recursive:true});for(const f of['index.html','app.js','styles.css'])fs.copyFileSync('client/'+f,'client/dist/'+f);console.log('Built client/dist');
+const fs=require('fs');fs.rmSync('client/dist',{recursive:true,force:true});fs.mkdirSync('client/dist',{recursive:true});for(const f of['index.html','app.js','styles.css'])fs.copyFileSync('client/'+f,'client/dist/'+f);console.log('Build complete');
