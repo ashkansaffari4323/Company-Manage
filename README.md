@@ -1,15 +1,17 @@
-# Company Manage Final v28
+# Company Manage Final v29
 
-Complete replacement build. No patch scripts.
+Complete replacement package with one Vercel API function.
 
-Highlights:
-- Autodesk login callback and sign out
-- Exactly one Vercel serverless function
-- Company directory, filters, ERP/Tax edits, audit, auto rename, member removal and purge
-- Company loading in logical groups of 1,000 with a five-second pause
-- Hub users loaded in safe pages of 100, grouped by 500 with a five-second pause
-- Users & Access: Select All Filtered and Deselect All
-- Hub-user search by name, email, company and status
-- Select one user, show direct project list, remove from selected/all projects, then remove from Hub
-- Bulk user default-company change
-- Comprehensive multi-sheet Excel Hub User Project Register
+New Project Names tab:
+- Load and search projects
+- Select individual, all filtered, or clear selection
+- Add/remove prefix
+- Add/remove suffix
+- Set or transform BIM 360 job number
+- Preview original and proposed names
+- Validate reserved characters, duplicate names, empty names, and lengths
+- Apply changes to BIM 360 projects with the legacy HQ PATCH endpoint
+- ACC/Forma failures are preserved and reported as unsupported/rejected
+- Excel export of the preview and results
+
+Also includes Autodesk login, company directory, Users & Access, Hub User Removal, Bulk User Company, and Reports export.
