@@ -1,17 +1,17 @@
-# Company Manage Final v29
+# Company Manage Final v30
 
-Complete replacement package with one Vercel API function.
+Emergency correction after v29.
 
-New Project Names tab:
-- Load and search projects
-- Select individual, all filtered, or clear selection
-- Add/remove prefix
-- Add/remove suffix
-- Set or transform BIM 360 job number
-- Preview original and proposed names
-- Validate reserved characters, duplicate names, empty names, and lengths
-- Apply changes to BIM 360 projects with the legacy HQ PATCH endpoint
-- ACC/Forma failures are preserved and reported as unsupported/rejected
-- Excel export of the preview and results
+The Project Numbers tab modifies BIM 360 `job_number` only. The backend PATCH body never includes `name`.
 
-Also includes Autodesk login, company directory, Users & Access, Hub User Removal, Bulk User Company, and Reports export.
+Supported job-number operations:
+- Add prefix
+- Remove prefix
+- Add suffix
+- Remove suffix
+- Replace complete job number
+- Search and multi-select projects
+- Select all filtered and deselect all
+- Preview and Excel export
+
+The exact BIM 360 update body is `{ "job_number": "..." }`.
