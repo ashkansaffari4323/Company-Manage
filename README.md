@@ -1,18 +1,20 @@
-# Company Manage v33
+# Company Manage v34
 
 Complete replacement package (one Vercel API function: `api/index.js`).
 
-## New in v33: Replace company
-Every Company Directory row has a searchable **Replace with** picker and a **Move** button.
-Move finds every member of that company in every project and reassigns them to the chosen company.
-Options: also change the Hub default company of those users, and delete the old company afterwards.
-Select several companies and use **Replace selected companies with** to merge many into one.
-Project-member company changes use the ACC project-user PATCH (`companyId`); BIM 360 projects may reject it and are reported.
+## New in v34
+- **Searchable company picker** for Replace with, Replace selected, and Bulk User Company target:
+  type to filter 10,000+ companies, arrow keys + Enter, shows members, projects, ERP ID and trade.
+- **Show selected only** toggle on every list (companies, projects, project users, Hub users, user projects, job numbers, replace preview).
+- **Replace company with preview, test and verification**:
+  1. Finds every member of the company across all projects.
+  2. Preview shows ACC (movable) vs BIM 360 (not supported by Autodesk API) rows.
+  3. "Test on 1 member first" moves one member and confirms by reading it back from Autodesk.
+  4. Move selected members, optionally change Hub default company, optionally delete the old company only if fully moved.
+  Every change is read back from Autodesk; rows show "Moved - verified" or the exact error.
 
-## Everything else
-- Company Directory: No ERP ID / No Tax ID / No members / No logo / Unused / Duplicate filters, Add ERP/Tax, logos,
-  clickable Members/Projects audit with member removal, Auto Rename, Bulk ERP/Tax from Excel, Remove Members + Purge.
-- Import Companies (full template), Users & Access, User Removal, Bulk User Company,
-  Project Numbers (job_number only), Reports & Excel (Hub User Project Register).
+## Requirements for changing a member's company
+- Signed-in user must be Project Admin (or Hub Admin) on those projects. Uses the ACC project-user PATCH with `companyId`.
+- BIM 360 projects cannot be changed through the API; change them in BIM 360 Project Admin.
 
 Vercel: Framework Other | Build `npm run build` | Output `client/dist`. Environment variables: see `.env.example`.

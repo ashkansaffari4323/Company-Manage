@@ -1,5 +1,5 @@
 'use strict';
-/* Company Manage v33 - complete admin console for Autodesk Construction Cloud / BIM 360 */
+/* Company Manage v34 - complete admin console for Autodesk Construction Cloud / BIM 360 */
 
 const API = '/api/index?action=';
 const PAGE_STEP = 300;
@@ -11,11 +11,14 @@ const S = {
   projects: [], projectsLoaded: false,
   access: { pSearch: '', pStatus: 'all', pSel: new Set(), members: [], mSearch: '', mCompany: 'all', mSel: new Set(), mLimit: PAGE_STEP, errors: [], role: '' },
   user: { users: [], loaded: false, search: '', company: 'all', limit: PAGE_STEP, selected: null, projects: [], loading: false, pSearch: '', pSel: new Set() },
-  bulk: { search: '', company: 'all', sel: new Set(), target: '', preview: false, limit: PAGE_STEP },
+  bulk: { search: '', company: 'all', sel: new Set(), preview: false, limit: PAGE_STEP },
   jobs: { search: '', sel: new Set(), op: 'addPrefix', value: '', preview: [], noJob: false, limit: PAGE_STEP },
   imp: { rows: [], file: '' },
+  only: {},          // "show selected only" per selection set
+  pick: {},          // combobox choices: key -> company id
+  moveOpts: { hub: true, purge: false },
+  move: null,        // replace-company preview/result state
   audit: null,
-  replace: { __bulk: '', __hub: true, __purge: false },
   reports: []
 };
 
@@ -27,6 +30,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const hasText = (list, q) => !q || list.some((v) => String(v == null ? '' : v).toLowerCase().includes(q));
 const roleNames = (roles) => (roles || []).map((r) => r.name || r).join(', ');
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+const isBim = (platform) => /bim/i.test(platform || '');
 
 async function api(action, opts) {
   const o = opts || {};
@@ -62,6 +67,15 @@ const chip = (key, label, on, ch) => `<label class="chip"><input type="checkbox"
 const rowBox = (set, id, on) => `<input type="checkbox" data-ch="row" data-set="${set}" data-id="${esc(id)}" ${on ? 'checked' : ''}>`;
 const moreBtn = (key, shown, total) => (total > shown ? `<div class="bar" style="margin-top:10px"><button class="btn light" data-act="more" data-k="${key}">Show ${Math.min(PAGE_STEP, total - shown)} more (${shown} of ${total} shown)</button></div>` : '');
 
+/* Select-all / deselect-all / show-selected-only control group used by every list. */
+function selBar(set) {
+  return `<button class="btn soft" data-act="selectAll" data-set="${set}">Select All Filtered</button>
+    <button class="btn light" data-act="clearSel" data-set="${set}">Deselect All</button>
+    <label class="chip ${S.only[set] ? 'on' : ''}"><input type="checkbox" data-ch="only" data-set="${set}" ${S.only[set] ? 'checked' : ''}> Show selected only</label>
+    <span class="badge" data-count="${set}">${SETS()[set].size} selected</span>`;
+}
+const onlySel = (set, list, idf) => (S.only[set] ? list.filter((x) => SETS()[set].has(idf(x))) : list);
+
 function pushReports(rows) {
   const t = new Date().toLocaleString();
   for (const r of rows) S.reports.push({ Time: t, Type: r.Type || '', Name: r.Name || '', Project: r.Project || '', Result: r.Result || '', Detail: r.Detail || '' });
@@ -88,9 +102,14 @@ function addSheet(wb, name, rows) {
 }
 
 function openModal(html, wide) { $('#modal').innerHTML = `<div class="modal"><div class="modalbox ${wide ? 'wide' : ''}">${html}</div></div>`; }
-function closeModal() { $('#modal').innerHTML = ''; if (S.audit) S.audit.cancelled = true; S.audit = null; }
+function closeModal() {
+  $('#modal').innerHTML = '';
+  if (S.audit) S.audit.cancelled = true;
+  S.audit = null;
+  if (S.move && !S.move.running) S.move = null;
+}
 
-function keepFocus(container, paint) {
+function keepFocus(paint) {
   const act = document.activeElement;
   const id = act && act.id;
   const pos = act && act.selectionStart;
@@ -102,10 +121,79 @@ function keepFocus(container, paint) {
 }
 
 /* ------------------------------------------------------------- selection */
-const SETS = () => ({ cSel: S.cSel, pSel: S.access.pSel, mSel: S.access.mSel, uProjSel: S.user.pSel, bulkSel: S.bulk.sel, jobSel: S.jobs.sel });
+const SETS = () => ({ cSel: S.cSel, pSel: S.access.pSel, mSel: S.access.mSel, uProjSel: S.user.pSel, bulkSel: S.bulk.sel, jobSel: S.jobs.sel, moveSel: S.move ? S.move.sel : new Set() });
 function paintCounts() {
   const sets = SETS();
   document.querySelectorAll('[data-count]').forEach((el) => { el.textContent = `${sets[el.dataset.count].size} selected`; });
+}
+
+/* ------------------------------------------------- company combobox */
+const liveCompanies = () => S.companies.filter((c) => c.status !== 'deleted');
+const companyById = (id) => S.companies.find((c) => c.id === id);
+function comboHtml(key, placeholder, exclude) {
+  const c = companyById(S.pick[key]);
+  return `<div class="combo ${c ? 'has' : ''}"><input id="combo_${esc(key)}" class="input combo-in" autocomplete="off" data-combo="${esc(key)}" data-exclude="${esc(exclude || '')}" placeholder="${esc(placeholder || 'Search company...')}" value="${esc(c ? c.name : '')}">${c ? `<button class="combo-x" title="Clear" data-act="comboClear" data-key="${esc(key)}">&times;</button>` : '<span class="combo-caret">&#9662;</span>'}</div>`;
+}
+const COMBO = { input: null, items: [], idx: 0 };
+function comboMatches(text, exclude) {
+  const q = norm(text);
+  const pool = liveCompanies().filter((c) => c.id !== exclude);
+  if (!q) return pool.slice().sort((a, b) => b.members - a.members || a.name.localeCompare(b.name));
+  const starts = [], contains = [];
+  for (const c of pool) {
+    const n = norm(c.name);
+    if (n.startsWith(q)) starts.push(c);
+    else if (n.includes(q) || norm(c.erpId).includes(q) || norm(c.taxId).includes(q)) contains.push(c);
+  }
+  starts.sort((a, b) => a.name.localeCompare(b.name));
+  contains.sort((a, b) => a.name.localeCompare(b.name));
+  return starts.concat(contains);
+}
+function comboOpen(input) {
+  COMBO.input = input;
+  const all = comboMatches(input.value, input.dataset.exclude);
+  COMBO.items = all.slice(0, 60);
+  COMBO.idx = 0;
+  let panel = $('#comboPanel');
+  if (!panel) { panel = document.createElement('div'); panel.id = 'comboPanel'; panel.className = 'combo-panel'; document.body.appendChild(panel); }
+  if (!S.companiesLoaded) {
+    panel.innerHTML = '<div class="combo-empty">Load the company directory first.</div>';
+  } else if (!COMBO.items.length) {
+    panel.innerHTML = '<div class="combo-empty">No matching company.</div>';
+  } else {
+    panel.innerHTML = COMBO.items.map((c, i) => `<div class="combo-opt ${i === 0 ? 'act' : ''}" data-i="${i}"><b>${esc(c.name)}</b><small>${plural(c.members, 'member')} &middot; ${plural(c.projects, 'project')}${c.erpId ? ' &middot; ERP ' + esc(c.erpId) : ''}${c.trade ? ' &middot; ' + esc(c.trade) : ''}</small></div>`).join('') +
+      (all.length > COMBO.items.length ? `<div class="combo-more">Showing 60 of ${all.length.toLocaleString()} matches - keep typing to narrow down</div>` : '');
+  }
+  const r = input.getBoundingClientRect();
+  const below = window.innerHeight - r.bottom;
+  panel.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 420))}px`;
+  panel.style.width = `${Math.max(r.width, 380)}px`;
+  if (below < 300 && r.top > below) { panel.style.top = ''; panel.style.bottom = `${window.innerHeight - r.top + 4}px`; }
+  else { panel.style.bottom = ''; panel.style.top = `${r.bottom + 4}px`; }
+  panel.style.display = 'block';
+}
+function comboClose() { const p = $('#comboPanel'); if (p) p.style.display = 'none'; COMBO.input = null; }
+function comboHighlight(i) {
+  const opts = document.querySelectorAll('#comboPanel .combo-opt');
+  if (!opts.length) return;
+  COMBO.idx = (i + opts.length) % opts.length;
+  opts.forEach((o, n) => o.classList.toggle('act', n === COMBO.idx));
+  opts[COMBO.idx].scrollIntoView({ block: 'nearest' });
+}
+function comboChoose(i) {
+  const c = COMBO.items[i];
+  const input = COMBO.input;
+  if (!c || !input) return;
+  S.pick[input.dataset.combo] = c.id;
+  input.value = c.name;
+  const box = input.closest('.combo');
+  if (box) {
+    box.classList.add('has');
+    const caret = box.querySelector('.combo-caret');
+    if (caret) caret.outerHTML = `<button class="combo-x" title="Clear" data-act="comboClear" data-key="${esc(input.dataset.combo)}">&times;</button>`;
+  }
+  comboClose();
+  if (input.dataset.combo === '__bulkUser') { S.bulk.preview = false; renderView(); }
 }
 
 /* --------------------------------------------------------------- filters */
@@ -113,7 +201,7 @@ function filteredCompanies() {
   const f = S.cf, q = f.search.trim().toLowerCase();
   let dupes = null;
   if (f.dupes) { dupes = new Map(); for (const c of S.companies) { const k = norm(c.name); dupes.set(k, (dupes.get(k) || 0) + 1); } }
-  return S.companies.filter((c) => {
+  const list = S.companies.filter((c) => {
     if (f.status !== 'all' && c.status !== f.status) return false;
     if (f.noErp && c.erpId) return false;
     if (f.noTax && c.taxId) return false;
@@ -123,20 +211,26 @@ function filteredCompanies() {
     if (dupes && dupes.get(norm(c.name)) < 2) return false;
     return hasText([c.name, c.trade, c.erpId, c.taxId], q);
   });
+  return onlySel('cSel', list, (c) => c.id);
 }
-const filteredProjects = (search, status) => {
+const searchProjects = (search, status) => {
   const q = (search || '').trim().toLowerCase();
-  return S.projects.filter((p) => (status === 'all' || !status || p.status === status) && hasText([p.name, p.jobNumber, p.status, p.id], q));
+  return S.projects.filter((p) => (status === 'all' || !status || p.status === status) && hasText([p.name, p.jobNumber, p.status, p.id, p.platform], q));
 };
+const accessProjects = () => onlySel('pSel', searchProjects(S.access.pSearch, S.access.pStatus), (p) => p.id);
 function filteredMembers() {
   const a = S.access, q = a.mSearch.trim().toLowerCase();
-  return a.members.filter((m) => (a.mCompany === 'all' || m.company === a.mCompany) && hasText([m.projectName, m.name, m.email, m.company, roleNames(m.roles), m.status], q));
+  const list = a.members.filter((m) => (a.mCompany === 'all' || m.company === a.mCompany) && hasText([m.projectName, m.name, m.email, m.company, roleNames(m.roles), m.status], q));
+  return onlySel('mSel', list, (m) => m.key);
 }
-function filteredHubUsers(search, company) {
+function searchHubUsers(search, company) {
   const q = (search || '').trim().toLowerCase();
   return S.user.users.filter((u) => (company === 'all' || u.company === company) && hasText([u.name, u.email, u.company, u.status], q));
 }
-const filteredJobs = () => filteredProjects(S.jobs.search, 'all').filter((p) => !S.jobs.noJob || !p.jobNumber);
+const bulkUsers = () => onlySel('bulkSel', searchHubUsers(S.bulk.search, S.bulk.company), (u) => u.id);
+const userProjects = () => onlySel('uProjSel', S.user.projects.filter((p) => hasText([p.projectName, p.status, roleNames(p.roles)], S.user.pSearch.trim().toLowerCase())), (p) => p.projectId);
+const filteredJobs = () => onlySel('jobSel', searchProjects(S.jobs.search, 'all').filter((p) => !S.jobs.noJob || !p.jobNumber), (p) => p.id);
+const moveRows = () => (S.move ? onlySel('moveSel', S.move.rows.filter((r) => hasText([r.projectName, r.name, r.email, r.company], (S.move.search || '').toLowerCase())), (r) => r.key) : []);
 
 /* ---------------------------------------------------------------- shell */
 const TABS = [
@@ -146,8 +240,9 @@ const TABS = [
 ];
 
 function render() {
+  comboClose();
   $('#app').innerHTML = `<div class="layout">
-    <aside class="side"><div class="brand">Company Manage<small>v33 &middot; Hub administration</small></div>
+    <aside class="side"><div class="brand">Company Manage<small>v34 &middot; Hub administration</small></div>
       <nav>${TABS.map(([id, label]) => `<button data-act="nav" data-tab="${id}" class="${S.tab === id ? 'on' : ''}">${label}</button>`).join('')}</nav></aside>
     <main class="main">
       <header class="head"><h1>${esc(TABS.find((t) => t[0] === S.tab)[1])}</h1>
@@ -165,9 +260,8 @@ const VIEWS = {};
 function renderView() {
   const view = $('#view');
   if (!view) return;
-  keepFocus(view, () => {
-    view.innerHTML = S.connected || S.tab === 'dashboard' ? VIEWS[S.tab]() : connectView();
-  });
+  comboClose();
+  keepFocus(() => { view.innerHTML = S.connected || S.tab === 'dashboard' ? VIEWS[S.tab]() : connectView(); });
 }
 const connectView = () => `<div class="card empty-state"><h2>Connect to Autodesk</h2><p>Sign in with an Autodesk account that has Hub Admin access. All actions use that account's permissions.</p><button class="btn" data-act="auth">Connect Autodesk</button></div>`;
 
@@ -188,18 +282,19 @@ VIEWS.dashboard = () => {
     ${quick('noMembers', 'Companies with no members', noMem.toLocaleString())}${quick('unused', 'Unused (no members, no projects)', unused.toLocaleString())}
     ${quick('noImage', 'Companies without a logo', noImg.toLocaleString())}${quick('dupes', 'Possible duplicate names', '&#8943;')}</div></div>
   <div class="card"><h3>What each tab does</h3><ul class="steps">
-    <li><b>Company Directory</b> - filter every company, add ERP/Tax IDs, upload logos, click Members/Projects for a full audit, <b>replace one company with another</b> (moves every member in every project), auto rename, bulk ERP/Tax from Excel, remove members and purge.</li>
+    <li><b>Company Directory</b> - filters, ERP/Tax IDs, logos, Members/Projects audit, <b>Replace with</b> (moves every member of a company in every project, with preview, test and verification), Auto Rename, Bulk ERP/Tax, Remove Members + Purge.</li>
     <li><b>Import Companies</b> - validate and import Excel files with every company field Autodesk accepts.</li>
-    <li><b>Users &amp; Access</b> - select multiple projects, load their users, search, change roles or remove access in bulk.</li>
+    <li><b>Users &amp; Access</b> - select projects, load users, change roles or remove access in bulk.</li>
     <li><b>User Removal</b> - pick a Hub user, see every project, remove from selected or all projects, then remove from the Hub.</li>
-    <li><b>Bulk User Company</b> - move users from many companies to one target company in one operation.</li>
+    <li><b>Bulk User Company</b> - move users' Hub default company from many companies to one target.</li>
     <li><b>Project Numbers</b> - add or remove prefixes and suffixes on BIM 360 job numbers (never the project name).</li>
-    <li><b>Reports &amp; Excel</b> - action log and the comprehensive Hub User Project Register workbook.</li></ul></div>`;
+    <li><b>Reports &amp; Excel</b> - action log and the comprehensive Hub User Project Register workbook.</li></ul>
+    <p class="muted">Every list has <b>Select All Filtered</b>, <b>Deselect All</b> and <b>Show selected only</b>.</p></div>`;
 };
 
 /* ------------------------------------------------------ company directory */
 VIEWS.companies = () => {
-  const rows = filteredCompanies(), f = S.cf, shown = rows.slice(0, S.cLimit), R = S.replace;
+  const rows = filteredCompanies(), f = S.cf, shown = rows.slice(0, S.cLimit);
   return `<div class="card">
     <div class="bar"><input id="cSearch" class="input grow" data-in="cSearch" placeholder="Search company name, trade, ERP ID or Tax ID" value="${esc(f.search)}">
       <select class="select" data-ch="cStatus">${['all', 'active', 'inactive', 'deleted'].map((s) => `<option value="${s}" ${f.status === s ? 'selected' : ''}>${s === 'all' ? 'All statuses' : s[0].toUpperCase() + s.slice(1)}</option>`).join('')}</select>
@@ -207,19 +302,15 @@ VIEWS.companies = () => {
       <button class="btn light" data-act="exportCompanies">Export Filtered</button></div>
     <div class="bar chips">${chip('noErp', 'No ERP ID', f.noErp, 'cf')}${chip('noTax', 'No Tax ID', f.noTax, 'cf')}${chip('noMembers', 'No members', f.noMembers, 'cf')}${chip('noImage', 'No logo', f.noImage, 'cf')}${chip('unused', 'Unused (0 members, 0 projects)', f.unused, 'cf')}${chip('dupes', 'Duplicate names', f.dupes, 'cf')}
       <button class="btn light small" data-act="resetCompanyFilters">Reset filters</button></div>
-    <div class="bar"><span class="badge">${rows.length.toLocaleString()} of ${S.companies.length.toLocaleString()} companies</span>
-      <button class="btn soft" data-act="selectAll" data-set="cSel">Select All Filtered</button><button class="btn light" data-act="clearSel" data-set="cSel">Deselect All</button>
-      <span class="badge" data-count="cSel">${S.cSel.size} selected</span>
-      <input id="renamePrefix" class="input" value="Not integrated company" placeholder="Auto rename prefix">
+    <div class="bar"><span class="badge">${rows.length.toLocaleString()} of ${S.companies.length.toLocaleString()} companies</span>${selBar('cSel')}</div>
+    <div class="bar"><input id="renamePrefix" class="input" value="Not integrated company" placeholder="Auto rename prefix">
       <button class="btn soft" data-act="autoRename">Auto Rename</button>
       <button class="btn light" data-act="bulkErpTax">Bulk ERP / Tax from Excel</button>
       <button class="btn danger" data-act="deepPurge">Remove Members + Purge</button></div>
-    <datalist id="companyOptions">${companyOptions()}</datalist>
-    <div class="bar replacebar"><b>Replace selected companies with</b>
-      <input id="bulkReplace" class="input grow" list="companyOptions" data-in="bulkReplace" placeholder="Type to search the target company..." value="${esc(R.__bulk)}">
-      <label class="chip"><input type="checkbox" data-ch="optHub" ${R.__hub ? 'checked' : ''}> Also change Hub default company</label>
-      <label class="chip"><input type="checkbox" data-ch="optPurge" ${R.__purge ? 'checked' : ''}> Delete old company afterwards</label>
-      <button class="btn" data-act="replaceSelected">Move Members of Selected</button></div>
+    <div class="replacebar"><div class="bar" style="margin:0"><b>Replace selected companies with</b>
+      <div class="grow">${comboHtml('__bulk', 'Search the company that will receive all members...')}</div>
+      <button class="btn" data-act="replaceSelected">Preview Move</button></div>
+      <p class="muted small">Every member of the selected companies, in every project, is moved to the chosen company. You review a preview, can test one member first, and each change is read back from Autodesk to confirm it applied.</p></div>
     ${tbl(['Select', 'Logo', 'Company', 'Trade', 'ERP ID', 'Tax ID', 'Status', 'Members', 'Projects', 'Replace with (moves all members)', 'Logo upload'],
       shown.map((c) => [rowBox('cSel', c.id, S.cSel.has(c.id)),
         c.imageUrl ? `<img class="logo" src="${esc(c.imageUrl)}" alt="">` : '<span class="muted">-</span>',
@@ -227,9 +318,9 @@ VIEWS.companies = () => {
         c.erpId ? esc(c.erpId) : `<button class="btn soft small" data-act="addField" data-kind="erp" data-id="${esc(c.id)}">+ Add ERP ID</button>`,
         c.taxId ? esc(c.taxId) : `<button class="btn soft small" data-act="addField" data-kind="tax" data-id="${esc(c.id)}">+ Add Tax ID</button>`,
         `<span class="badge">${esc(c.status || 'active')}</span>`,
-        `<button class="btn soft small" data-act="audit" data-id="${esc(c.id)}">${c.members} member${c.members === 1 ? '' : 's'}</button>`,
-        `<button class="btn soft small" data-act="audit" data-id="${esc(c.id)}">${c.projects} project${c.projects === 1 ? '' : 's'}</button>`,
-        `<div class="replacecell"><input id="rep_${esc(c.id)}" class="input small" list="companyOptions" data-in="replace" data-id="${esc(c.id)}" placeholder="Choose company..." value="${esc(R[c.id] || '')}"><button class="btn small" data-act="replaceOne" data-id="${esc(c.id)}">Move</button></div>`,
+        `<button class="btn soft small" data-act="audit" data-id="${esc(c.id)}">${plural(c.members, 'member')}</button>`,
+        `<button class="btn soft small" data-act="audit" data-id="${esc(c.id)}">${plural(c.projects, 'project')}</button>`,
+        `<div class="replacecell">${comboHtml(c.id, 'Choose company...', c.id)}<button class="btn small" data-act="replaceOne" data-id="${esc(c.id)}">Move</button></div>`,
         `<label class="btn light small">Logo<input type="file" accept="image/*" hidden data-ch="logo" data-id="${esc(c.id)}"></label>`]),
       S.companiesLoaded ? 'No companies match the current filters.' : 'Select Load All Companies. Large directories load in safe groups of 1,000 with a 5-second pause.')}
     ${moreBtn('cLimit', shown.length, rows.length)}</div>`;
@@ -239,7 +330,8 @@ async function loadCompanies() {
   if (S.busyLock) return;
   S.busyLock = true;
   try {
-    let offset = 0, total = 0, all = [], pending = [];
+    let offset = 0, total = 0, all = [];
+    const pending = [];
     setQueue('Loading companies...', 0);
     do {
       let group = 0;
@@ -259,7 +351,7 @@ async function loadCompanies() {
     } while (offset < total);
     for (const job of pending) {
       await sleep(5000);
-      try { const d = await api(`companies-page&hubId=${encodeURIComponent(S.hub)}&status=all&limit=${job.lim}&offset=${job.offset}`); all.push(...d.items); } catch { /* reported below */ }
+      try { const d = await api(`companies-page&hubId=${encodeURIComponent(S.hub)}&status=all&limit=${job.lim}&offset=${job.offset}`); all.push(...d.items); } catch { /* ignore */ }
     }
     S.companies = [...new Map(all.map((c) => [c.id, c])).values()];
     S.companiesLoaded = true; S.cSel.clear();
@@ -270,7 +362,8 @@ async function loadCompanies() {
 
 async function loadProjects(force) {
   if (S.projectsLoaded && !force) return;
-  let all = [], offset = 0, total = 1;
+  const all = [];
+  let offset = 0, total = 1;
   while (offset < total) {
     const d = await api(`projects-page&hubId=${encodeURIComponent(S.hub)}&offset=${offset}`);
     all.push(...d.items); total = d.total; offset = d.nextOffset;
@@ -285,7 +378,8 @@ async function loadHubUsers() {
   if (S.busyLock) return;
   S.busyLock = true;
   try {
-    let out = [], offset = 0, more = true, pending = [];
+    const out = [], pending = [];
+    let offset = 0, more = true;
     setQueue('Loading Hub users...');
     while (more) {
       let group = 0;
@@ -310,7 +404,7 @@ async function loadHubUsers() {
 
 /* --- company field edits */
 function addField(kind, id) {
-  const c = S.companies.find((x) => x.id === id);
+  const c = companyById(id);
   const erp = kind === 'erp';
   openModal(`<h3>${erp ? 'Add ERP ID' : 'Add Tax ID / ABN'}</h3><p class="muted">${esc(c.name)}</p>
     <div class="bar"><input id="fieldValue" class="input grow" placeholder="${erp ? 'ERP ID' : 'Tax ID / ABN'}" value="${esc(erp ? c.erpId : c.taxId)}">
@@ -323,7 +417,7 @@ async function saveField(kind, id) {
   const body = { hubId: S.hub, companyId: id };
   body[kind === 'erp' ? 'erp_id' : 'tax_id'] = v;
   await api('company-update', { body });
-  const c = S.companies.find((x) => x.id === id);
+  const c = companyById(id);
   if (kind === 'erp') c.erpId = v; else c.taxId = v;
   pushReports([{ Type: kind === 'erp' ? 'Add ERP ID' : 'Add Tax ID', Name: c.name, Result: 'Success', Detail: v }]);
   closeModal(); renderView();
@@ -333,7 +427,7 @@ async function uploadLogo(id, file) {
   const data = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(file); });
   await api('company-image', { body: { hubId: S.hub, companyId: id, fileName: file.name, mimeType: file.type, base64: data } });
   flash('Logo uploaded. Reload the directory to display the new image.');
-  const c = S.companies.find((x) => x.id === id); pushReports([{ Type: 'Logo upload', Name: c && c.name, Result: 'Success' }]);
+  const c = companyById(id); pushReports([{ Type: 'Logo upload', Name: c && c.name, Result: 'Success' }]);
 }
 
 /* --- auto rename */
@@ -356,13 +450,13 @@ async function autoRename() {
 
 /* --- bulk ERP/Tax from Excel */
 const ERP_TEMPLATE = [{ 'Company ID': '', 'Company Name': 'Example Pty Ltd', 'ERP ID': 'ERP-0001', 'Tax ID': '12 345 678 901' }];
+let ERP_ROWS = [];
 function bulkErpTax() {
   openModal(`<h3>Bulk ERP / Tax update from Excel</h3>
     <p class="muted">Columns: <b>Company ID</b> or <b>Company Name</b>, plus <b>ERP ID</b> and/or <b>Tax ID</b>. Companies are matched against the loaded directory.</p>
     <div class="bar"><button class="btn light" data-act="erpTemplate">Download template</button>
     <input type="file" accept=".xlsx,.xls,.csv" data-ch="erpFile"><button class="btn light" data-act="closeModal">Close</button></div><div id="erpPreview"></div>`, true);
 }
-let ERP_ROWS = [];
 async function erpFile(file) {
   if (!file) return;
   if (typeof XLSX === 'undefined') return showError('The Excel reader is not available. Check your internet connection and reload.');
@@ -393,7 +487,7 @@ async function applyErp() {
   closeModal(); flash(`ERP/Tax update complete: ${ok.size} updated, ${all.length - ok.size} failed.`); renderView();
 }
 
-/* --- company audit (members / projects) */
+/* --- membership scanning shared by audit, purge and replace */
 async function scanMemberships(companyIds, onProgress) {
   await loadProjects();
   const found = [], errors = [], total = S.projects.length;
@@ -405,13 +499,10 @@ async function scanMemberships(companyIds, onProgress) {
   return { found, errors };
 }
 
+/* --- company audit (members / projects) */
 function auditProgressHtml(st) {
   const pct = st.total ? Math.round(100 * st.checked / st.total) : 0;
   return `<b>Loading projects and members...</b><div class="progress"><div style="width:${pct}%"></div></div>${pct}% complete (${st.checked} of ${st.total} projects). Results appear when loading reaches 100%.`;
-}
-function auditLoadingHtml(st) {
-  return `<div class="bar"><h3 class="grow">${esc(st.company.name)}</h3><button class="btn light" data-act="closeModal">Close</button></div>
-    <div class="notice" id="auditProg">${auditProgressHtml(st)}</div>`;
 }
 function auditFinalHtml(st) {
   const q = (st.search || '').toLowerCase();
@@ -428,18 +519,20 @@ function auditFinalHtml(st) {
     <h4>Members (${members.length})</h4>${tbl(['Select', 'Project', 'Member', 'Email', 'Status', 'Roles'],
       members.slice(0, 600).map((m) => [`<input type="checkbox" data-ch="auditRow" data-key="${esc(m.key)}" ${st.sel.has(m.key) ? 'checked' : ''}>`, esc(m.projectName), esc(m.name), esc(m.email), esc(m.status), esc(roleNames(m.roles))]), 'No members.')}`;
 }
-function paintAudit() {
+function paintModalKeepScroll(html) {
   const box = $('.modalbox');
   const top = box ? box.scrollTop : 0;
-  keepFocus(null, () => openModal(auditFinalHtml(S.audit), true));
+  keepFocus(() => openModal(html, true));
   const nb = $('.modalbox');
   if (nb) nb.scrollTop = top;
 }
+const paintAudit = () => paintModalKeepScroll(auditFinalHtml(S.audit));
 
 async function runAudit(id) {
-  const c = S.companies.find((x) => x.id === id);
+  const c = companyById(id);
   const st = { company: c, members: [], errors: [], search: '', checked: 0, total: 0, sel: new Set(), cancelled: false };
-  S.audit = st; openModal(auditLoadingHtml(st), true);
+  S.audit = st;
+  openModal(`<div class="bar"><h3 class="grow">${esc(c.name)}</h3><button class="btn light" data-act="closeModal">Close</button></div><div class="notice" id="auditProg">${auditProgressHtml(st)}</div>`, true);
   try {
     const { found, errors } = await scanMemberships([id], (checked, total) => {
       st.checked = checked; st.total = total;
@@ -477,7 +570,7 @@ async function auditRemove() {
 async function deepPurge() {
   const selected = filteredCompanies().filter((c) => S.cSel.has(c.id));
   if (!selected.length) return showError('Select at least one company first.');
-  const typed = prompt(`This removes every project member assigned to ${selected.length} compan${selected.length === 1 ? 'y' : 'ies'} and then deletes the compan${selected.length === 1 ? 'y' : 'ies'}.\n\nType PURGE to continue.`);
+  const typed = prompt(`This removes every project member assigned to ${plural(selected.length, 'company').replace('companys', 'companies')} and then deletes them.\n\nType PURGE to continue.`);
   if (typed !== 'PURGE') return;
   const needScan = selected.filter((c) => c.members > 0 || c.projects > 0);
   let memberships = [], scanErrors = [];
@@ -493,118 +586,199 @@ async function deepPurge() {
     const d = await api('companies-purge', { body: { hubId: S.hub, companies: deletable.slice(i, i + 25) } });
     d.results.forEach((r) => { if (r.success) deleted.add(r.id); });
     pushReports(d.results.map((r) => ({ Type: 'Company purge', Name: r.name, Result: r.success ? 'Success' : 'Failed', Detail: r.error || '' })));
-    setQueue(`Purging companies: ${Math.min(i + 25, deletable.length)} of ${deletable.length}`, 100 * Math.min(i + 25, deletable.length) / deletable.length);
   }
-  const skipped = selected.filter((c) => !deleted.has(c.id) && !deletable.includes(c));
-  pushReports(skipped.map((c) => ({ Type: 'Company purge', Name: c.name, Result: 'Pending', Detail: scanErrors.length ? 'Some projects could not be scanned; company kept.' : 'One or more memberships could not be removed.' })));
+  selected.filter((c) => !deleted.has(c.id) && !deletable.includes(c)).forEach((c) => pushReports([{ Type: 'Company purge', Name: c.name, Result: 'Pending', Detail: scanErrors.length ? 'Some projects could not be scanned; company kept.' : 'One or more memberships could not be removed.' }]));
   S.companies = S.companies.filter((c) => !deleted.has(c.id)); S.cSel.clear();
   flash(`Purge complete: ${deleted.size} deleted, ${selected.length - deleted.size} kept. See Reports.`); renderView();
 }
 
-/* --- replace / merge company (moves members in every project) */
-const companyLabel = (c) => `${c.name}  [${String(c.id).slice(0, 8)}]`;
-let OPTION_CACHE = { key: '', html: '' };
-function companyOptions() {
-  const live = S.companies.filter((c) => c.status !== 'deleted');
-  const key = live.length + '|' + live.reduce((n, c) => n + c.name.length, 0);
-  if (OPTION_CACHE.key !== key) {
-    OPTION_CACHE = { key, html: live.slice().sort((a, b) => a.name.localeCompare(b.name)).map((c) => `<option value="${esc(companyLabel(c))}"></option>`).join('') };
-  }
-  return OPTION_CACHE.html;
-}
-function resolveCompany(text) {
-  const t = String(text || '').trim();
-  if (!t) return null;
-  const live = S.companies.filter((c) => c.status !== 'deleted');
-  const exact = live.find((c) => companyLabel(c) === t);
-  if (exact) return exact;
-  const byName = live.filter((c) => norm(c.name) === norm(t));
-  return byName.length === 1 ? byName[0] : null;
-}
-
-async function moveCompanies(sources, target) {
-  const opts = { hub: S.replace.__hub !== false, purge: !!S.replace.__purge };
-  const ids = sources.map((c) => c.id);
-  const names = sources.map((c) => c.name).join(', ');
-  const msg = `Move every project member of:\n${names.length > 300 ? sources.length + ' companies' : names}\n\nto: ${target.name}\n\n` +
-    (opts.hub ? 'Hub default company will also change.\n' : '') +
-    (opts.purge ? `The old compan${sources.length === 1 ? 'y' : 'ies'} will then be deleted.\n` : '') + '\nContinue?';
-  if (!confirm(msg)) return;
-
-  // 1. find every membership of the source companies across all projects
-  const { found, errors } = await scanMemberships(ids, (a, b) => setQueue(`Finding members in projects: ${a} of ${b}`, 100 * a / b));
-
-  // 2. move each project membership to the target company
-  const moved = [];
-  for (let i = 0; i < found.length; i += 25) {
-    const d = await api('members-bulk', { body: { operation: 'company', companyId: target.id, items: found.slice(i, i + 25) } });
-    moved.push(...d.results);
-    setQueue(`Moving project members: ${Math.min(i + 25, found.length)} of ${found.length}`, 100 * Math.min(i + 25, found.length) / found.length);
-  }
-  pushReports(moved.map((r) => ({ Type: 'Replace company (project)', Name: r.email || r.name, Project: r.projectName, Result: r.success ? 'Success' : 'Failed', Detail: r.success ? `-> ${target.name}` : r.error })));
-
-  // 3. change Hub default company for users whose default is a source company
-  const hubMoved = [];
-  if (opts.hub) {
-    if (!S.user.loaded) { S.busyLock = false; await loadHubUsers(); }
-    const hubUsers = S.user.users.filter((u) => ids.includes(u.companyId));
-    for (let i = 0; i < hubUsers.length; i += 25) {
-      const d = await api('bulk-user-company', { body: { hubId: S.hub, companyId: target.id, companyName: target.name, users: hubUsers.slice(i, i + 25) } });
-      hubMoved.push(...d.results);
-      setQueue(`Changing Hub default company: ${Math.min(i + 25, hubUsers.length)} of ${hubUsers.length}`, 100 * Math.min(i + 25, hubUsers.length) / hubUsers.length);
+/* ======================================================================
+   REPLACE COMPANY: preview -> (optional test on one member) -> move -> verify
+   ====================================================================== */
+async function startReplace(sources, target) {
+  if (!target) return showError('Choose the replacement company from the drop-down list.');
+  sources = sources.filter((c) => c.id !== target.id);
+  if (!sources.length) return showError('Select at least one company that is different from the target.');
+  const M = {
+    sources, target, rows: [], errors: [], sel: new Set(), search: '', phase: 'scan', checked: 0, total: 0,
+    results: [], hubResults: [], purged: [], running: false
+  };
+  S.move = M; S.only.moveSel = false;
+  paintMove();
+  try {
+    const { found, errors } = await scanMemberships(sources.map((c) => c.id), (a, b) => {
+      M.checked = a; M.total = b;
+      const el = $('#moveProg');
+      if (el) el.innerHTML = moveProgressHtml(M);
+    });
+    if (S.move !== M) return;
+    const plat = new Map(S.projects.map((p) => [p.id, p.platform]));
+    M.rows = found.map((m) => ({ ...m, sourceId: m.companyId, projectPlatform: m.projectPlatform || plat.get(m.projectId) || '', status2: 'Pending' }));
+    M.rows.forEach((r) => { if (isBim(r.projectPlatform)) r.status2 = 'BIM 360 - not supported'; });
+    M.errors = errors;
+    M.rows.filter((r) => !isBim(r.projectPlatform)).forEach((r) => M.sel.add(r.key));
+    M.phase = 'preview';
+    if (!S.user.loaded && S.moveOpts.hub) {
+      S.busyLock = false;
+      await loadHubUsers();
     }
-    const okHub = new Set(hubMoved.filter((r) => r.success).map((r) => r.id));
-    S.user.users.forEach((u) => { if (okHub.has(u.id)) { u.company = target.name; u.companyId = target.id; } });
-    pushReports(hubMoved.map((r) => ({ Type: 'Replace company (Hub default)', Name: r.email, Result: r.success ? 'Success' : 'Failed', Detail: r.success ? `${r.oldCompany || '(none)'} -> ${target.name}` : r.error })));
-  }
+    paintMove();
+  } catch (e) { M.phase = 'error'; M.fatal = e.message; paintMove(); }
+}
 
-  // 4. update counts locally; optionally delete sources that are now empty
-  const okKeys = new Set(moved.filter((r) => r.success).map((r) => r.key));
-  const failedBySource = new Map();
-  found.forEach((m) => { if (!okKeys.has(m.key)) failedBySource.set(m.companyId, (failedBySource.get(m.companyId) || 0) + 1); });
-  const movedProjects = new Set(found.filter((m) => okKeys.has(m.key)).map((m) => m.projectId));
-  target.members += okKeys.size;
-  target.projects = Math.max(target.projects, movedProjects.size);
-  sources.forEach((c) => { if (!failedBySource.get(c.id) && !errors.length) { c.members = 0; c.projects = 0; } });
+function moveProgressHtml(M) {
+  const pct = M.total ? Math.round(100 * M.checked / M.total) : 0;
+  return `<b>Finding every member of ${M.sources.length === 1 ? esc(M.sources[0].name) : M.sources.length + ' companies'} across all projects...</b><div class="progress"><div style="width:${pct}%"></div></div>${pct}% (${M.checked} of ${M.total || '?'} projects)`;
+}
 
-  let purged = 0;
-  if (opts.purge) {
-    const clean = sources.filter((c) => !failedBySource.get(c.id) && !errors.length);
-    if (clean.length) {
-      const d = await api('companies-purge', { body: { hubId: S.hub, companies: clean } });
-      const ok = new Set(d.results.filter((r) => r.success).map((r) => r.id));
-      purged = ok.size;
-      S.companies = S.companies.filter((c) => !ok.has(c.id));
-      pushReports(d.results.map((r) => ({ Type: 'Replace company (delete old)', Name: r.name, Result: r.success ? 'Success' : 'Failed', Detail: r.error || '' })));
+function paintMove() {
+  const M = S.move;
+  if (!M) return;
+  const srcNames = M.sources.map((c) => esc(c.name)).join(', ');
+  const head = `<div class="bar"><div class="grow"><h3 style="margin:0">Replace company</h3><div class="muted">${M.sources.length > 5 ? plural(M.sources.length, 'company').replace('companys', 'companies') : srcNames} &rarr; <b>${esc(M.target.name)}</b></div></div>
+    <button class="btn light" data-act="closeModal" ${M.running ? 'disabled' : ''}>Close</button></div>`;
+  if (M.phase === 'scan') return openModal(head + `<div class="notice" id="moveProg">${moveProgressHtml(M)}</div>`, true);
+  if (M.phase === 'error') return openModal(head + `<div class="error">${esc(M.fatal)}</div>`, true);
+
+  const acc = M.rows.filter((r) => !isBim(r.projectPlatform));
+  const bim = M.rows.filter((r) => isBim(r.projectPlatform));
+  const hubUsers = S.user.users.filter((u) => M.sources.some((c) => c.id === u.companyId));
+  const projects = new Set(M.rows.map((r) => r.projectId)).size;
+  const done = M.phase === 'done';
+  const okCount = M.results.filter((r) => r.success).length;
+  const verified = M.results.filter((r) => r.success && r.verified).length;
+  const failed = M.results.filter((r) => !r.success).length;
+  const rows = moveRows();
+  const statusCell = (r) => {
+    const cls = /Verified|Moved/.test(r.status2) ? 'ok' : /Failed|not supported/.test(r.status2) ? 'bad' : 'muted';
+    return `<span class="${cls}">${esc(r.status2)}</span>${r.err ? `<div class="small bad">${esc(r.err)}</div>` : ''}`;
+  };
+  const html = head + `
+    <div class="stats compact">
+      <div class="stat"><span>Members found</span><b>${M.rows.length}</b><small>in ${plural(projects, 'project')}</small></div>
+      <div class="stat"><span>Can be moved (ACC)</span><b>${acc.length}</b></div>
+      <div class="stat"><span>BIM 360 (not supported)</span><b>${bim.length}</b><small>change in BIM 360 admin</small></div>
+      <div class="stat"><span>Hub defaults to change</span><b>${S.moveOpts.hub ? hubUsers.length : 0}</b><small>${S.user.loaded ? '' : 'Hub users not loaded'}</small></div>
+    </div>
+    ${M.errors.length ? `<div class="error">${M.errors.length} project(s) could not be read, so some members may be missing. The old company will not be deleted.</div>` : ''}
+    ${done ? `<div class="notice"><b>Finished.</b> ${okCount} moved (${verified} verified by reading back from Autodesk), ${failed} failed.
+        ${S.moveOpts.hub ? ` Hub default company: ${M.hubResults.filter((r) => r.success).length} changed, ${M.hubResults.filter((r) => !r.success).length} failed.` : ''}
+        ${S.moveOpts.purge ? ` Old companies deleted: ${M.purged.length}.` : ''} Full detail is in Reports.</div>` : ''}
+    ${!done ? `<div class="bar">
+        <label class="chip"><input type="checkbox" data-ch="moveOpt" data-k="hub" ${S.moveOpts.hub ? 'checked' : ''} ${M.running ? 'disabled' : ''}> Also change Hub default company of these users</label>
+        <label class="chip"><input type="checkbox" data-ch="moveOpt" data-k="purge" ${S.moveOpts.purge ? 'checked' : ''} ${M.running ? 'disabled' : ''}> Delete old compan${M.sources.length === 1 ? 'y' : 'ies'} when fully moved</label></div>` : ''}
+    <div class="bar"><input id="moveSearch" class="input grow" data-in="moveSearch" placeholder="Search project, member, email" value="${esc(M.search)}">${selBar('moveSel')}</div>
+    ${!done ? `<div class="bar">
+        <button class="btn soft" data-act="moveTest" ${M.running || !M.sel.size ? 'disabled' : ''}>Test on 1 member first</button>
+        <button class="btn" data-act="moveRun" ${M.running ? 'disabled' : ''}>Move ${M.sel.size} selected member${M.sel.size === 1 ? '' : 's'}${S.moveOpts.hub ? ' + Hub defaults' : ''}</button>
+        <button class="btn light" data-act="moveExport">Export Preview</button>
+        ${M.running ? '<span class="badge warn">Working...</span>' : ''}</div>` : `<div class="bar"><button class="btn light" data-act="moveExport">Export Results</button><button class="btn" data-act="closeModal">Done</button></div>`}
+    ${tbl(['Select', 'Project', 'Platform', 'Member', 'Email', 'Current company', 'Result'],
+      rows.slice(0, 800).map((r) => [isBim(r.projectPlatform) ? '<span class="muted">-</span>' : rowBox('moveSel', r.key, M.sel.has(r.key)), esc(r.projectName), esc(r.projectPlatform || 'acc'), esc(r.name), esc(r.email), esc(r.company), statusCell(r)]),
+      M.rows.length ? 'No rows match the search.' : `No project members found. ${S.moveOpts.hub ? 'You can still change Hub default company' : ''}${S.moveOpts.purge ? ' and delete the old company' : ''} with the button above.`)}
+    ${rows.length > 800 ? `<p class="muted">Showing 800 of ${rows.length} rows. All selected rows are processed.</p>` : ''}`;
+  paintModalKeepScroll(html);
+}
+
+async function moveMembers(items) {
+  const M = S.move, out = [];
+  for (let i = 0; i < items.length; i += 20) {
+    const chunk = items.slice(i, i + 20);
+    let d;
+    try {
+      d = await api('members-bulk', { body: { operation: 'company', companyId: M.target.id, items: chunk } });
+    } catch (e) {
+      d = { results: chunk.map((m) => ({ key: m.key, success: false, error: e.message })) };
     }
-    sources.filter((c) => !clean.includes(c)).forEach((c) => pushReports([{ Type: 'Replace company (delete old)', Name: c.name, Result: 'Pending', Detail: 'Not deleted because some members could not be moved or some projects could not be read.' }]));
+    d.results.forEach((r) => {
+      const row = M.rows.find((x) => x.key === r.key);
+      if (row) {
+        row.status2 = r.success ? (r.verified ? 'Moved - verified' : 'Moved (not re-checked)') : 'Failed';
+        row.err = r.success ? '' : r.error;
+        if (r.success) { row.company = M.target.name; row.companyId = M.target.id; M.sel.delete(r.key); }
+      }
+    });
+    out.push(...d.results);
+    setQueue(`Moving members to ${M.target.name}: ${Math.min(i + 20, items.length)} of ${items.length}`, 100 * Math.min(i + 20, items.length) / items.length);
+    paintMove();
   }
-  if (errors.length) pushReports(errors.map((e) => ({ Type: 'Replace company (scan)', Project: e.projectName, Result: 'Failed', Detail: e.error })));
-
-  ids.forEach((id) => { delete S.replace[id]; S.cSel.delete(id); });
-  S.replace.__bulk = '';
-  const failed = found.length - okKeys.size;
-  flash(`Replace complete: ${okKeys.size} project membership(s) moved to ${target.name}${failed ? `, ${failed} failed` : ''}` +
-    (opts.hub ? `, ${hubMoved.filter((r) => r.success).length} Hub default(s) changed` : '') +
-    (opts.purge ? `, ${purged} old compan${purged === 1 ? 'y' : 'ies'} deleted` : '') +
-    (errors.length ? `. ${errors.length} project(s) could not be read - see Reports.` : '.'));
-  renderView();
+  M.results.push(...out);
+  pushReports(out.map((r) => ({ Type: 'Replace company (project member)', Name: r.email || r.name, Project: r.projectName, Result: r.success ? 'Success' : 'Failed', Detail: r.success ? `-> ${M.target.name}${r.verified ? ' (verified)' : ''}` : r.error })));
+  return out;
 }
 
-async function replaceOne(id) {
-  const src = S.companies.find((c) => c.id === id);
-  const typed = S.replace[id] || ($('#rep_' + id) || {}).value;
-  const target = resolveCompany(typed);
-  if (!target) return showError('Choose the replacement company from the list (start typing its name, then pick it).');
-  if (target.id === src.id) return showError('The replacement company must be a different company.');
-  await moveCompanies([src], target);
+async function moveTest() {
+  const M = S.move;
+  const first = M.rows.find((r) => M.sel.has(r.key));
+  if (!first) return;
+  M.running = true; paintMove();
+  try {
+    const [r] = await moveMembers([first]);
+    setQueue(null);
+    if (r && r.success) { M.target.members += 1; M.countedMoves = (M.countedMoves || 0) + 1; }
+    if (r && r.success) flash(`Test passed: ${first.name || first.email} in ${first.projectName} now belongs to ${M.target.name}${r.verified ? ' (confirmed by Autodesk)' : ''}. You can now move the rest.`);
+    else showError(`Test failed: ${r ? r.error : 'no response'}. Nothing else was changed.`);
+  } finally { M.running = false; paintMove(); }
 }
-async function replaceSelected() {
-  const target = resolveCompany(S.replace.__bulk);
-  if (!target) return showError('Choose the target company from the list (start typing its name, then pick it).');
-  const sources = filteredCompanies().filter((c) => S.cSel.has(c.id) && c.id !== target.id);
-  if (!sources.length) return showError('Select one or more companies to replace (the target itself is excluded).');
-  await moveCompanies(sources, target);
+
+async function moveRun() {
+  const M = S.move;
+  const items = M.rows.filter((r) => M.sel.has(r.key));
+  const hubUsers = S.moveOpts.hub ? S.user.users.filter((u) => M.sources.some((c) => c.id === u.companyId)) : [];
+  if (!items.length && !hubUsers.length && !S.moveOpts.purge) return showError('Nothing selected to move.');
+  if (!confirm(`Move ${items.length} project membership(s) to "${M.target.name}"${hubUsers.length ? ` and change ${hubUsers.length} Hub default compan${hubUsers.length === 1 ? 'y' : 'ies'}` : ''}${S.moveOpts.purge ? ', then delete the old compan' + (M.sources.length === 1 ? 'y' : 'ies') + ' if fully moved' : ''}?`)) return;
+  M.running = true; paintMove();
+  try {
+    if (items.length) await moveMembers(items);
+
+    if (hubUsers.length) {
+      for (let i = 0; i < hubUsers.length; i += 25) {
+        const d = await api('bulk-user-company', { body: { hubId: S.hub, companyId: M.target.id, companyName: M.target.name, users: hubUsers.slice(i, i + 25) } });
+        M.hubResults.push(...d.results);
+        setQueue(`Changing Hub default company: ${Math.min(i + 25, hubUsers.length)} of ${hubUsers.length}`, 100 * Math.min(i + 25, hubUsers.length) / hubUsers.length);
+      }
+      const okHub = new Set(M.hubResults.filter((r) => r.success).map((r) => r.id));
+      S.user.users.forEach((u) => { if (okHub.has(u.id)) { u.company = M.target.name; u.companyId = M.target.id; } });
+      pushReports(M.hubResults.map((r) => ({ Type: 'Replace company (Hub default)', Name: r.email, Result: r.success ? 'Success' : 'Failed', Detail: r.success ? `${r.oldCompany || '(none)'} -> ${M.target.name}${r.verified ? ' (verified)' : ''}` : r.error })));
+    }
+
+    // Local counts
+    const movedNow = M.rows.filter((r) => /Moved/.test(r.status2));
+    M.target.members += movedNow.length - (M.countedMoves || 0);
+    M.countedMoves = movedNow.length;
+    M.target.projects = Math.max(M.target.projects, new Set(movedNow.map((r) => r.projectId)).size);
+
+    if (S.moveOpts.purge) {
+      const clean = M.sources.filter((src) => !M.errors.length && M.rows.filter((r) => r.sourceId === src.id).every((r) => /Moved/.test(r.status2)));
+      if (clean.length) {
+        const d = await api('companies-purge', { body: { hubId: S.hub, companies: clean } });
+        M.purged = d.results.filter((r) => r.success).map((r) => r.id);
+        S.companies = S.companies.filter((c) => !M.purged.includes(c.id));
+        pushReports(d.results.map((r) => ({ Type: 'Replace company (delete old)', Name: r.name, Result: r.success ? 'Success' : 'Failed', Detail: r.error || '' })));
+      }
+      M.sources.filter((c) => !clean.includes(c)).forEach((c) => pushReports([{ Type: 'Replace company (delete old)', Name: c.name, Result: 'Pending', Detail: 'Kept: some members were not moved, are on BIM 360 projects, or some projects could not be read.' }]));
+    }
+    M.sources.forEach((src) => {
+      const left = M.rows.filter((r) => r.sourceId === src.id && !/Moved/.test(r.status2)).length;
+      if (!M.errors.length) { src.members = left; src.projects = new Set(M.rows.filter((r) => r.sourceId === src.id && !/Moved/.test(r.status2)).map((r) => r.projectId)).size; }
+      delete S.pick[src.id];
+      S.cSel.delete(src.id);
+    });
+    M.phase = 'done';
+    setQueue(null);
+  } catch (e) {
+    showError(e.message);
+  } finally {
+    M.running = false;
+    paintMove();
+    renderViewBehindModal();
+  }
+}
+function renderViewBehindModal() { const keep = $('#modal').innerHTML; renderView(); $('#modal').innerHTML = keep; }
+
+function moveExport() {
+  const M = S.move;
+  exportRows(`Replace_${M.target.name.slice(0, 20)}.xlsx`, M.rows.map((r) => ({ Project: r.projectName, Platform: r.projectPlatform || 'acc', Member: r.name, Email: r.email, 'Original company': (companyById(r.sourceId) || {}).name || '', 'Target company': M.target.name, Result: r.status2, Error: r.err || '' })), 'Replace');
 }
 
 /* ---------------------------------------------------------- import */
@@ -623,8 +797,7 @@ VIEWS.import = () => {
 function importTemplate() {
   if (typeof XLSX === 'undefined') return showError('The Excel writer is not available. Check your internet connection.');
   const wb = XLSX.utils.book_new();
-  const row = { 'Name': 'Example Company Pty Ltd', 'Trade': 'Corporate & Professional Services', 'Address Line 1': '123 Example Street', 'Address Line 2': 'Level 2', 'City': 'Adelaide', 'State or Province': 'South Australia', 'Postal Code': '5000', 'Country': 'Australia', 'Phone': '+61 8 0000 0000', 'Website URL': 'https://example.com', 'Description': 'Example description', 'ERP ID': 'ERP-0001', 'Tax ID': '12 345 678 901' };
-  addSheet(wb, 'Companies', [row]);
+  addSheet(wb, 'Companies', [{ 'Name': 'Example Company Pty Ltd', 'Trade': 'Corporate & Professional Services', 'Address Line 1': '123 Example Street', 'Address Line 2': 'Level 2', 'City': 'Adelaide', 'State or Province': 'South Australia', 'Postal Code': '5000', 'Country': 'Australia', 'Phone': '+61 8 0000 0000', 'Website URL': 'https://example.com', 'Description': 'Example description', 'ERP ID': 'ERP-0001', 'Tax ID': '12 345 678 901' }]);
   addSheet(wb, 'Instructions', [{ Field: 'Name', Required: 'Yes', Notes: 'Must be unique in the Hub (max 255 characters).' }, { Field: 'Trade', Required: 'No', Notes: 'Must match an Autodesk trade. Blank uses the default.' }, { Field: 'Country / State', Required: 'No', Notes: 'State must be valid for the selected country.' }, { Field: 'ERP ID / Tax ID', Required: 'No', Notes: 'Stored on the company for external systems.' }]);
   XLSX.writeFile(wb, 'Company_Import_Full_Template.xlsx');
 }
@@ -665,24 +838,22 @@ async function runImport() {
 
 /* ----------------------------------------------------- users & access */
 VIEWS.access = () => {
-  const a = S.access, projects = filteredProjects(a.pSearch, a.pStatus), members = filteredMembers();
+  const a = S.access, projects = accessProjects(), members = filteredMembers();
   const statuses = [...new Set(S.projects.map((p) => p.status).filter(Boolean))].sort();
   const companies = [...new Set(a.members.map((m) => m.company).filter(Boolean))].sort();
   const roles = [...new Set(a.members.flatMap((m) => m.roles.map((r) => r.name)))].sort();
   return `<div class="card"><h3>1. Select projects</h3>
-    <div class="bar"><input id="pSearch" class="input grow" data-in="pSearch" placeholder="Search project name, job number, status or ID" value="${esc(a.pSearch)}">
+    <div class="bar"><input id="pSearch" class="input grow" data-in="pSearch" placeholder="Search project name, job number, status, platform or ID" value="${esc(a.pSearch)}">
       <select class="select" data-ch="pStatus"><option value="all">All statuses</option>${statuses.map((s) => `<option ${a.pStatus === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>
-      <button class="btn" data-act="loadProjectsBtn">${S.projectsLoaded ? 'Reload Projects' : 'Load Projects'}</button>
-      <button class="btn soft" data-act="selectAll" data-set="pSel">Select All Filtered</button><button class="btn light" data-act="clearSel" data-set="pSel">Deselect All</button>
-      <span class="badge" data-count="pSel">${a.pSel.size} selected</span><button class="btn" data-act="loadMembers">Load Users From Selected Projects</button></div>
-    ${tbl(['Select', 'Project', 'Job Number', 'Status'], projects.slice(0, 400).map((p) => [rowBox('pSel', p.id, a.pSel.has(p.id)), esc(p.name), esc(p.jobNumber), esc(p.status)]), 'Load projects to begin.')}</div>
+      <button class="btn" data-act="loadProjectsBtn">${S.projectsLoaded ? 'Reload Projects' : 'Load Projects'}</button></div>
+    <div class="bar">${selBar('pSel')}<button class="btn" data-act="loadMembers">Load Users From Selected Projects</button></div>
+    ${tbl(['Select', 'Project', 'Job Number', 'Status', 'Platform'], projects.slice(0, 500).map((p) => [rowBox('pSel', p.id, a.pSel.has(p.id)), esc(p.name), esc(p.jobNumber), esc(p.status), esc(p.platform)]), 'Load projects to begin.')}</div>
   <div class="card"><h3>2. Users in selected projects</h3>
     ${a.errors.length ? `<div class="error">${a.errors.length} project(s) could not be read.</div>` : ''}
     <div class="bar"><input id="mSearch" class="input grow" data-in="mSearch" placeholder="Search user, email, company, project, role or status" value="${esc(a.mSearch)}">
       <select class="select" data-ch="mCompany"><option value="all">All companies</option>${companies.map((c) => `<option ${a.mCompany === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
       <span class="badge">${members.length.toLocaleString()} of ${a.members.length.toLocaleString()} memberships</span></div>
-    <div class="bar"><button class="btn soft" data-act="selectAll" data-set="mSel">Select All Filtered</button><button class="btn light" data-act="clearSel" data-set="mSel">Deselect All</button>
-      <span class="badge" data-count="mSel">${a.mSel.size} selected</span>
+    <div class="bar">${selBar('mSel')}
       <select class="select" data-ch="mRole"><option value="">Choose new role...</option>${roles.map((r) => `<option ${a.role === r ? 'selected' : ''}>${esc(r)}</option>`).join('')}</select>
       <button class="btn" data-act="changeRole">Change Role</button><button class="btn danger" data-act="removeMembers">Remove From Projects</button>
       <button class="btn light" data-act="exportMembers">Export Excel</button></div>
@@ -731,9 +902,9 @@ async function removeMembers() {
 
 /* -------------------------------------------------------- user removal */
 VIEWS.user = () => {
-  const u = S.user, users = filteredHubUsers(u.search, u.company), shown = users.slice(0, u.limit);
+  const u = S.user, users = searchHubUsers(u.search, u.company), shown = users.slice(0, u.limit);
   const companies = [...new Set(u.users.map((x) => x.company).filter(Boolean))].sort();
-  const projects = u.projects.filter((p) => hasText([p.projectName, p.status, roleNames(p.roles)], u.pSearch.trim().toLowerCase()));
+  const projects = userProjects();
   const sel = u.selected;
   return `<div class="card"><h3>1. Find a Hub user</h3>
     <div class="bar"><input id="uSearch" class="input grow" data-in="uSearch" placeholder="Search name, email, company or status" value="${esc(u.search)}">
@@ -742,12 +913,10 @@ VIEWS.user = () => {
     ${tbl(['User', 'Email', 'Company', 'Status', 'Action'], shown.map((x) => [esc(x.name), esc(x.email), esc(x.company), esc(x.status), `<button class="btn soft small" data-act="selectUser" data-id="${esc(x.id)}">Select User</button>`]), 'Load Hub users to begin.')}
     ${moreBtn('uLimit', shown.length, users.length)}</div>
   ${sel ? `<div class="card"><div class="bar"><div class="grow"><h3>${esc(sel.name || sel.email)}</h3><div class="muted">${esc(sel.email)} &middot; ${esc(sel.company || 'No company')} &middot; ${esc(sel.status)}</div></div>
-      <span class="badge">${u.loading ? 'Loading projects...' : u.projects.length + ' project memberships'}</span></div>
+      <span class="badge">${u.loading ? 'Loading projects...' : plural(u.projects.length, 'project membership')}</span></div>
     ${u.loading ? '<div class="notice"><b>Loading this user\'s projects...</b></div>' : `
-    <div class="bar"><input id="uPSearch" class="input grow" data-in="uPSearch" placeholder="Search this user's projects" value="${esc(u.pSearch)}">
-      <button class="btn soft" data-act="selectAll" data-set="uProjSel">Select All Filtered</button><button class="btn light" data-act="clearSel" data-set="uProjSel">Deselect All</button>
-      <span class="badge" data-count="uProjSel">${u.pSel.size} selected</span>
-      <button class="btn danger" data-act="removeUserSelected">Remove From Selected Projects</button><button class="btn danger" data-act="removeUserAll" ${u.projects.length ? '' : 'disabled'}>Remove From All Projects</button>
+    <div class="bar"><input id="uPSearch" class="input grow" data-in="uPSearch" placeholder="Search this user's projects" value="${esc(u.pSearch)}">${selBar('uProjSel')}</div>
+    <div class="bar"><button class="btn danger" data-act="removeUserSelected">Remove From Selected Projects</button><button class="btn danger" data-act="removeUserAll" ${u.projects.length ? '' : 'disabled'}>Remove From All Projects</button>
       <button class="btn light" data-act="exportUserProjects">Export Excel</button></div>
     ${tbl(['Select', 'Project', 'Status', 'Roles'], projects.map((p) => [rowBox('uProjSel', p.projectId, u.pSel.has(p.projectId)), esc(p.projectName), esc(p.status), esc(roleNames(p.roles))]), 'This user has no accessible project memberships.')}
     <div class="dangerbox"><h4>Remove user from the Hub</h4><p class="muted">Enabled only when no project memberships remain. Type REMOVE USER to confirm.</p>
@@ -777,26 +946,24 @@ async function removeHubUser() {
 
 /* ------------------------------------------------- bulk user company */
 VIEWS.bulk = () => {
-  const b = S.bulk, users = filteredHubUsers(b.search, b.company), shown = users.slice(0, b.limit);
+  const b = S.bulk, users = bulkUsers(), shown = users.slice(0, b.limit);
   const current = [...new Set(S.user.users.map((x) => x.company).filter(Boolean))].sort();
-  const targets = S.companies.filter((c) => c.status !== 'deleted');
-  const target = S.companies.find((c) => c.id === b.target);
+  const target = companyById(S.pick.__bulkUser);
   const count = b.sel.size;
-  return `<div class="notice">Changes each selected user's <b>default Hub company</b>. Users can come from many different companies; all move to one target. To move a whole company's project members, use <b>Replace with</b> in the Company Directory.</div>
+  return `<div class="notice">Changes each selected user's <b>default Hub company</b>. To move a whole company's members inside every project, use <b>Replace with</b> in the Company Directory.</div>
   <div class="card"><div class="bar"><button class="btn" data-act="loadHubUsers">${S.user.loaded ? 'Reload Hub Users' : 'Load Hub Users'}</button>
       <button class="btn" data-act="loadCompanies">${S.companiesLoaded ? 'Reload Companies' : 'Load Companies'}</button>
       <input id="bSearch" class="input grow" data-in="bSearch" placeholder="Search name, email, company or status" value="${esc(b.search)}">
       <select class="select" data-ch="bCompany"><option value="all">All current companies</option>${current.map((c) => `<option ${b.company === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
-    <div class="bar"><button class="btn soft" data-act="selectAll" data-set="bulkSel">Select All Filtered</button><button class="btn light" data-act="clearSel" data-set="bulkSel">Deselect All</button>
-      <span class="badge" data-count="bulkSel">${count} selected</span>
-      <select class="select grow" data-ch="bTarget"><option value="">Select target company...</option>${targets.map((c) => `<option value="${esc(c.id)}" ${b.target === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
+    <div class="bar">${selBar('bulkSel')}</div>
+    <div class="bar"><b>Target company</b><div class="grow">${comboHtml('__bulkUser', 'Search the target company...')}</div>
       <button class="btn soft" data-act="bulkPreview">Preview</button><button class="btn" data-act="bulkApply" ${b.preview && count && target ? '' : 'disabled'}>Apply Company Change</button></div>
     ${b.preview && target ? `<div class="notice"><b>${count}</b> users will move to <b>${esc(target.name)}</b>.</div>` : ''}
     ${tbl(['Select', 'User', 'Email', 'Current Company', 'Status', 'Target Company'], shown.map((x) => [rowBox('bulkSel', x.id, b.sel.has(x.id)), esc(x.name), esc(x.email), esc(x.company), esc(x.status), esc(target ? target.name : '')]), 'Load Hub users and companies to begin.')}
     ${moreBtn('bLimit', shown.length, users.length)}</div>`;
 };
 async function bulkApply() {
-  const b = S.bulk, target = S.companies.find((c) => c.id === b.target), users = S.user.users.filter((u) => b.sel.has(u.id));
+  const b = S.bulk, target = companyById(S.pick.__bulkUser), users = S.user.users.filter((u) => b.sel.has(u.id));
   if (!target || !users.length) return;
   if (!confirm(`Move ${users.length} user(s) to "${target.name}"?`)) return;
   const all = [];
@@ -806,8 +973,8 @@ async function bulkApply() {
   }
   const ok = new Set(all.filter((r) => r.success).map((r) => r.id));
   S.user.users.forEach((u) => { if (ok.has(u.id)) { u.company = target.name; u.companyId = target.id; } });
-  pushReports(all.map((r) => ({ Type: 'User company change', Name: r.email, Result: r.success ? 'Success' : 'Failed', Detail: r.success ? `${r.oldCompany || '(none)'} -> ${r.newCompany}` : r.error })));
-  b.sel.clear(); b.preview = false; flash(`${ok.size} users moved, ${all.length - ok.size} failed.`); renderView();
+  pushReports(all.map((r) => ({ Type: 'User company change', Name: r.email, Result: r.success ? 'Success' : 'Failed', Detail: r.success ? `${r.oldCompany || '(none)'} -> ${r.newCompany}${r.verified ? ' (verified)' : ''}` : r.error })));
+  b.sel.clear(); b.preview = false; flash(`${ok.size} users moved (${all.filter((r) => r.verified).length} verified), ${all.length - ok.size} failed.`); renderView();
 }
 
 /* ------------------------------------------------------ project numbers */
@@ -823,16 +990,15 @@ function proposeJob(current, op, value) {
 VIEWS.numbers = () => {
   const J = S.jobs, projects = filteredJobs(), shown = projects.slice(0, J.limit), pm = new Map(J.preview.map((p) => [p.id, p]));
   const changed = J.preview.filter((p) => p.valid && p.proposed !== p.jobNumber).length;
-  return `<div class="notice"><b>Job number only.</b> This tool updates the BIM 360 <code>job_number</code> field. Project names are shown for identification and are never sent or changed. ACC/Forma projects may reject the update; failures are reported.</div>
-  <div class="card"><div class="bar"><input id="jSearch" class="input grow" data-in="jSearch" placeholder="Search project name, job number, status or ID" value="${esc(J.search)}">
-      ${chip('noJob', 'No job number', J.noJob, 'jobChip')}<button class="btn" data-act="loadProjectsBtn">${S.projectsLoaded ? 'Reload Projects' : 'Load Projects'}</button>
-      <button class="btn soft" data-act="selectAll" data-set="jobSel">Select All Filtered</button><button class="btn light" data-act="clearSel" data-set="jobSel">Deselect All</button>
-      <span class="badge" data-count="jobSel">${J.sel.size} selected</span></div>
+  return `<div class="notice"><b>Job number only.</b> This tool updates the BIM 360 <code>job_number</code> field. Project names are shown for identification and are never sent or changed. ACC projects may reject the update; failures are reported.</div>
+  <div class="card"><div class="bar"><input id="jSearch" class="input grow" data-in="jSearch" placeholder="Search project name, job number, status, platform or ID" value="${esc(J.search)}">
+      ${chip('noJob', 'No job number', J.noJob, 'jobChip')}<button class="btn" data-act="loadProjectsBtn">${S.projectsLoaded ? 'Reload Projects' : 'Load Projects'}</button></div>
+    <div class="bar">${selBar('jobSel')}</div>
     <div class="bar"><select class="select" data-ch="jobOp">${JOB_OPS.map(([v, l]) => `<option value="${v}" ${J.op === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
       <input id="jValue" class="input grow" data-in="jValue" placeholder="Prefix, suffix or full job number" value="${esc(J.value)}">
       <button class="btn soft" data-act="jobPreview">Preview</button><button class="btn" data-act="jobApply" ${changed ? '' : 'disabled'}>Apply ${changed || ''} Job Number Changes</button>
       <button class="btn light" data-act="exportJobs">Export Preview</button></div>
-    ${tbl(['Select', 'Project name (unchanged)', 'Current job number', 'Proposed job number', 'Status', 'Check'], shown.map((p) => { const x = pm.get(p.id); return [rowBox('jobSel', p.id, J.sel.has(p.id)), esc(p.name), esc(p.jobNumber), x ? `<b>${esc(x.proposed)}</b>` : '', esc(p.status), x ? `<span class="${x.valid ? 'ok' : 'bad'}">${esc(x.msg)}</span>` : '']; }), 'Load projects to begin.')}
+    ${tbl(['Select', 'Project name (unchanged)', 'Platform', 'Current job number', 'Proposed job number', 'Status', 'Check'], shown.map((p) => { const x = pm.get(p.id); return [rowBox('jobSel', p.id, J.sel.has(p.id)), esc(p.name), esc(p.platform), esc(p.jobNumber), x ? `<b>${esc(x.proposed)}</b>` : '', esc(p.status), x ? `<span class="${x.valid ? 'ok' : 'bad'}">${esc(x.msg)}</span>` : '']; }), 'Load projects to begin.')}
     ${moreBtn('jLimit', shown.length, projects.length)}</div>`;
 };
 function jobPreview() {
@@ -884,7 +1050,7 @@ async function buildRegister() {
   const hubByEmail = new Map(S.user.users.map((u) => [norm(u.email), u]));
   const rows = memberships.map((m) => {
     const hu = hubByEmail.get(norm(m.email)) || {};
-    return { 'User': m.name, 'Email': m.email, 'Hub company': hu.company || '', 'Hub status': hu.status || '', 'Project': m.projectName, 'Project status': m.projectStatus, 'Company on project': m.company, 'Role names': roleNames(m.roles), 'Role IDs': m.roles.map((r) => r.id).filter(Boolean).join(', '), 'Products': (m.products || []).join(', '), 'Member status': m.status, 'Project ID': m.projectId, 'User ID': m.userId };
+    return { 'User': m.name, 'Email': m.email, 'Hub company': hu.company || '', 'Hub status': hu.status || '', 'Project': m.projectName, 'Project status': m.projectStatus, 'Platform': m.projectPlatform, 'Company on project': m.company, 'Role names': roleNames(m.roles), 'Role IDs': m.roles.map((r) => r.id).filter(Boolean).join(', '), 'Products': (m.products || []).join(', '), 'Member status': m.status, 'Project ID': m.projectId, 'User ID': m.userId };
   });
   rows.sort((a, b) => String(a['Hub company']).localeCompare(String(b['Hub company'])) || String(a.User).localeCompare(String(b.User)) || String(a.Project).localeCompare(String(b.Project)));
   const byCompany = new Map(), byRole = new Map(), usersWithProjects = new Set(), perProject = new Map();
@@ -900,7 +1066,7 @@ async function buildRegister() {
   addSheet(wb, 'User Project Memberships', rows);
   addSheet(wb, 'Users by Company', [...byCompany].map(([k, v]) => ({ Company: k, 'Distinct users': v.users.size, 'Projects': v.projects.size, 'Memberships': v.count })).sort((a, b) => b.Memberships - a.Memberships));
   addSheet(wb, 'Roles Summary', [...byRole].map(([k, v]) => ({ Role: k, 'Distinct users': v.users.size, Memberships: v.count })).sort((a, b) => b.Memberships - a.Memberships));
-  addSheet(wb, 'Projects', S.projects.map((p) => ({ Project: p.name, 'Job number': p.jobNumber, Status: p.status, Classification: p.classification, Members: perProject.get(p.id) || 0, 'Project ID': p.id })));
+  addSheet(wb, 'Projects', S.projects.map((p) => ({ Project: p.name, 'Job number': p.jobNumber, Status: p.status, Platform: p.platform, Members: perProject.get(p.id) || 0, 'Project ID': p.id })));
   if (S.companiesLoaded) addSheet(wb, 'Companies', S.companies.map((c) => ({ Company: c.name, Trade: c.trade, 'ERP ID': c.erpId, 'Tax ID': c.taxId, Status: c.status, Members: c.members, Projects: c.projects, 'Company ID': c.id })));
   addSheet(wb, 'Users Without Projects', S.user.users.filter((u) => !usersWithProjects.has(norm(u.email))).map((u) => ({ Name: u.name, Email: u.email, Company: u.company, Status: u.status })));
   addSheet(wb, 'Exceptions', errors.map((e) => ({ Project: e.projectName, Problem: e.error })));
@@ -909,30 +1075,37 @@ async function buildRegister() {
 }
 
 /* ---------------------------------------------------------------- events */
+const SELECT_ALL = {
+  cSel: () => filteredCompanies().map((c) => c.id),
+  pSel: () => accessProjects().map((p) => p.id),
+  mSel: () => filteredMembers().map((m) => m.key),
+  uProjSel: () => userProjects().map((p) => p.projectId),
+  bulkSel: () => bulkUsers().map((u) => u.id),
+  jobSel: () => filteredJobs().map((p) => p.id),
+  moveSel: () => moveRows().filter((r) => !isBim(r.projectPlatform) && !/Moved/.test(r.status2)).map((r) => r.key)
+};
+const repaint = (set) => (set === 'moveSel' ? paintMove() : renderView());
+
 const ACT = {
   nav: (el) => { S.tab = el.dataset.tab; showError(''); render(); },
   clearError: () => showError(''),
   auth: async () => { if (S.connected) { await api('auth-logout', { body: {} }); location.reload(); } else { location.href = (await api('auth-login')).url; } },
   refreshHubs: async () => { await loadHubs(); render(); },
   closeModal,
-  more: (el) => { const k = el.dataset.k; const map = { cLimit: [S, 'cLimit'], mLimit: [S.access, 'mLimit'], uLimit: [S.user, 'limit'], bLimit: [S.bulk, 'limit'], jLimit: [S.jobs, 'limit'] }[k]; map[0][map[1]] += PAGE_STEP; renderView(); },
-  selectAll: (el) => {
-    const set = el.dataset.set, ids = {
-      cSel: () => filteredCompanies().map((c) => c.id), pSel: () => filteredProjects(S.access.pSearch, S.access.pStatus).map((p) => p.id),
-      mSel: () => filteredMembers().map((m) => m.key), uProjSel: () => S.user.projects.filter((p) => hasText([p.projectName, p.status, roleNames(p.roles)], S.user.pSearch.trim().toLowerCase())).map((p) => p.projectId),
-      bulkSel: () => filteredHubUsers(S.bulk.search, S.bulk.company).map((u) => u.id), jobSel: () => filteredJobs().map((p) => p.id)
-    }[set]();
-    ids.forEach((id) => SETS()[set].add(id)); S.bulk.preview = false; renderView();
-  },
-  clearSel: (el) => { SETS()[el.dataset.set].clear(); S.bulk.preview = false; renderView(); },
+  more: (el) => { const map = { cLimit: [S, 'cLimit'], mLimit: [S.access, 'mLimit'], uLimit: [S.user, 'limit'], bLimit: [S.bulk, 'limit'], jLimit: [S.jobs, 'limit'] }[el.dataset.k]; map[0][map[1]] += PAGE_STEP; renderView(); },
+  selectAll: (el) => { const set = el.dataset.set; SELECT_ALL[set]().forEach((id) => SETS()[set].add(id)); S.bulk.preview = false; repaint(set); },
+  clearSel: (el) => { const set = el.dataset.set; SETS()[set].clear(); S.only[set] = false; S.bulk.preview = false; repaint(set); },
   quick: (el) => { const f = S.cf; Object.keys(f).forEach((k) => { if (typeof f[k] === 'boolean') f[k] = false; }); f.search = ''; f.status = 'all'; f[el.dataset.q] = true; S.cLimit = PAGE_STEP; S.tab = 'companies'; render(); },
-  resetCompanyFilters: () => { const f = S.cf; Object.keys(f).forEach((k) => { if (typeof f[k] === 'boolean') f[k] = false; }); f.search = ''; f.status = 'all'; renderView(); },
+  resetCompanyFilters: () => { const f = S.cf; Object.keys(f).forEach((k) => { if (typeof f[k] === 'boolean') f[k] = false; }); f.search = ''; f.status = 'all'; S.only.cSel = false; renderView(); },
   loadCompanies, loadHubUsers,
   loadProjectsBtn: async () => { await loadProjects(true); flash(`Loaded ${S.projects.length.toLocaleString()} projects.`); renderView(); },
   exportCompanies: () => exportRows('Companies_Filtered.xlsx', filteredCompanies().map((c) => ({ Company: c.name, Trade: c.trade, 'ERP ID': c.erpId, 'Tax ID': c.taxId, Status: c.status, Members: c.members, Projects: c.projects, 'Company ID': c.id })), 'Companies'),
   addField: (el) => addField(el.dataset.kind, el.dataset.id), saveField: (el) => saveField(el.dataset.kind, el.dataset.id),
   autoRename, deepPurge, bulkErpTax, applyErp,
-  replaceOne: (el) => replaceOne(el.dataset.id), replaceSelected,
+  comboClear: (el, e) => { e.preventDefault(); delete S.pick[el.dataset.key]; const i = document.getElementById('combo_' + el.dataset.key); if (i) { i.value = ''; i.focus(); } const box = el.closest('.combo'); if (box) box.classList.remove('has'); el.outerHTML = '<span class="combo-caret">&#9662;</span>'; if (el.dataset.key === '__bulkUser') { S.bulk.preview = false; renderView(); } },
+  replaceOne: (el) => startReplace([companyById(el.dataset.id)], companyById(S.pick[el.dataset.id])),
+  replaceSelected: () => { const sources = S.companies.filter((c) => S.cSel.has(c.id)); if (!sources.length) return showError('Tick the companies to replace first.'); return startReplace(sources, companyById(S.pick.__bulk)); },
+  moveTest, moveRun, moveExport,
   erpTemplate: () => exportRows('ERP_Tax_Update_Template.xlsx', ERP_TEMPLATE, 'Template'),
   audit: (el) => runAudit(el.dataset.id),
   auditSelectAll: () => { const st = S.audit; st.members.filter((m) => hasText([m.projectName, m.projectStatus, m.name, m.email, m.status, roleNames(m.roles)], (st.search || '').toLowerCase())).forEach((m) => st.sel.add(m.key)); paintAudit(); },
@@ -944,7 +1117,7 @@ const ACT = {
   exportMembers: () => exportRows('Project_Users.xlsx', S.access.members.map((m) => ({ Project: m.projectName, User: m.name, Email: m.email, Company: m.company, Roles: roleNames(m.roles), Status: m.status })), 'Users'),
   selectUser: (el) => selectUser(el.dataset.id), removeUserSelected: () => removeUserProjects(false), removeUserAll: () => removeUserProjects(true), removeHubUser,
   exportUserProjects: () => exportRows('User_Projects.xlsx', S.user.projects.map((p) => ({ User: S.user.selected.email, Project: p.projectName, Status: p.status, Roles: roleNames(p.roles) })), 'Projects'),
-  bulkPreview: () => { S.bulk.preview = true; renderView(); }, bulkApply,
+  bulkPreview: () => { if (!companyById(S.pick.__bulkUser)) return showError('Choose the target company from the drop-down.'); S.bulk.preview = true; renderView(); }, bulkApply,
   jobPreview, jobApply,
   exportJobs: () => exportRows('Job_Number_Preview.xlsx', S.jobs.preview.map((p) => ({ Project: p.name, 'Current job number': p.jobNumber, 'Proposed job number': p.proposed, Check: p.msg })), 'Preview'),
   buildRegister,
@@ -954,6 +1127,7 @@ const ACT = {
 
 const rerender = debounce(renderView, 160);
 const debouncedAudit = debounce(() => { if (S.audit) paintAudit(); }, 200);
+const debouncedMove = debounce(() => { if (S.move) paintMove(); }, 200);
 const IN = {
   cSearch: (el) => { S.cf.search = el.value; S.cLimit = PAGE_STEP; rerender(); },
   pSearch: (el) => { S.access.pSearch = el.value; rerender(); },
@@ -963,32 +1137,72 @@ const IN = {
   bSearch: (el) => { S.bulk.search = el.value; S.bulk.limit = PAGE_STEP; S.bulk.preview = false; rerender(); },
   jSearch: (el) => { S.jobs.search = el.value; S.jobs.limit = PAGE_STEP; rerender(); },
   jValue: (el) => { S.jobs.value = el.value; },
-  replace: (el) => { S.replace[el.dataset.id] = el.value; },
-  bulkReplace: (el) => { S.replace.__bulk = el.value; },
-  auditSearch: (el) => { S.audit.search = el.value; debouncedAudit(); }
+  auditSearch: (el) => { S.audit.search = el.value; debouncedAudit(); },
+  moveSearch: (el) => { S.move.search = el.value; debouncedMove(); }
 };
 
 const CH = {
-  hub: (el) => { S.hub = el.value; S.companies = []; S.companiesLoaded = false; S.projects = []; S.projectsLoaded = false; S.user.users = []; S.user.loaded = false; S.access.members = []; renderView(); },
-  row: (el) => { const set = SETS()[el.dataset.set]; if (el.checked) set.add(el.dataset.id); else set.delete(el.dataset.id); if (el.dataset.set === 'bulkSel') S.bulk.preview = false; paintCounts(); },
+  hub: (el) => { S.hub = el.value; S.companies = []; S.companiesLoaded = false; S.projects = []; S.projectsLoaded = false; S.user.users = []; S.user.loaded = false; S.access.members = []; S.pick = {}; renderView(); },
+  row: (el) => {
+    const set = SETS()[el.dataset.set];
+    if (el.checked) set.add(el.dataset.id); else set.delete(el.dataset.id);
+    if (el.dataset.set === 'bulkSel') S.bulk.preview = false;
+    if (el.dataset.set === 'moveSel') { paintMove(); return; }
+    if (S.only[el.dataset.set] && !el.checked) { renderView(); return; }
+    paintCounts();
+  },
+  only: (el) => { S.only[el.dataset.set] = el.checked; repaint(el.dataset.set); },
   cf: (el) => { S.cf[el.dataset.k] = el.checked; S.cLimit = PAGE_STEP; renderView(); },
   cStatus: (el) => { S.cf.status = el.value; S.cLimit = PAGE_STEP; renderView(); },
   logo: (el) => uploadLogo(el.dataset.id, el.files[0]),
   erpFile: (el) => erpFile(el.files[0]), importFile: (el) => importFile(el.files[0]),
   auditRow: (el) => { if (el.checked) S.audit.sel.add(el.dataset.key); else S.audit.sel.delete(el.dataset.key); paintAudit(); },
-  optHub: (el) => { S.replace.__hub = el.checked; }, optPurge: (el) => { S.replace.__purge = el.checked; },
+  moveOpt: (el) => { S.moveOpts[el.dataset.k] = el.checked; paintMove(); },
   pStatus: (el) => { S.access.pStatus = el.value; renderView(); }, mCompany: (el) => { S.access.mCompany = el.value; renderView(); }, mRole: (el) => { S.access.role = el.value; },
   uCompany: (el) => { S.user.company = el.value; renderView(); },
-  bCompany: (el) => { S.bulk.company = el.value; S.bulk.preview = false; renderView(); }, bTarget: (el) => { S.bulk.target = el.value; S.bulk.preview = false; renderView(); },
+  bCompany: (el) => { S.bulk.company = el.value; S.bulk.preview = false; renderView(); },
   jobOp: (el) => { S.jobs.op = el.value; }, jobChip: (el) => { S.jobs.noJob = el.checked; renderView(); }
 };
 
 document.addEventListener('click', async (e) => {
+  if (!e.target.closest('.combo') && !e.target.closest('#comboPanel')) comboClose();
   const el = e.target.closest('[data-act]');
   if (!el || !ACT[el.dataset.act]) return;
   try { await ACT[el.dataset.act](el, e); } catch (err) { setQueue(null); showError(err.message); }
 });
-document.addEventListener('input', (e) => { const el = e.target.closest('[data-in]'); if (el && IN[el.dataset.in]) IN[el.dataset.in](el); });
+document.addEventListener('mousedown', (e) => {
+  const opt = e.target.closest('#comboPanel .combo-opt');
+  if (opt) { e.preventDefault(); comboChoose(Number(opt.dataset.i)); }
+});
+document.addEventListener('focusin', (e) => { if (e.target.matches && e.target.matches('.combo-in')) { e.target.select(); comboOpen(e.target); } });
+document.addEventListener('input', (e) => {
+  if (e.target.matches && e.target.matches('.combo-in')) {
+    if (S.pick[e.target.dataset.combo]) { delete S.pick[e.target.dataset.combo]; const b = e.target.closest('.combo'); if (b) b.classList.remove('has'); }
+    comboOpen(e.target);
+    return;
+  }
+  const el = e.target.closest('[data-in]');
+  if (el && IN[el.dataset.in]) IN[el.dataset.in](el);
+});
+document.addEventListener('keydown', (e) => {
+  if (!COMBO.input || e.target !== COMBO.input) return;
+  if (e.key === 'ArrowDown') { e.preventDefault(); comboHighlight(COMBO.idx + 1); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); comboHighlight(COMBO.idx - 1); }
+  else if (e.key === 'Enter') { e.preventDefault(); comboChoose(COMBO.idx); }
+  else if (e.key === 'Escape') { comboClose(); }
+});
+document.addEventListener('focusout', (e) => {
+  if (!e.target.matches || !e.target.matches('.combo-in')) return;
+  const input = e.target;
+  setTimeout(() => {
+    if (document.activeElement === input) return;
+    const picked = companyById(S.pick[input.dataset.combo]);
+    input.value = picked ? picked.name : input.value;
+    if (COMBO.input === input) comboClose();
+  }, 150);
+});
+window.addEventListener('scroll', () => { if (COMBO.input) comboClose(); }, true);
+window.addEventListener('resize', () => { if (COMBO.input) comboClose(); });
 document.addEventListener('change', async (e) => {
   const el = e.target.closest('[data-ch]');
   if (!el || !CH[el.dataset.ch]) return;
