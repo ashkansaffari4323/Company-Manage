@@ -1,5 +1,5 @@
 'use strict';
-/* Company Manage v32 - complete admin console for Autodesk Construction Cloud / BIM 360 */
+/* Company Manage v33 - complete admin console for Autodesk Construction Cloud / BIM 360 */
 
 const API = '/api/index?action=';
 const PAGE_STEP = 300;
@@ -15,6 +15,7 @@ const S = {
   jobs: { search: '', sel: new Set(), op: 'addPrefix', value: '', preview: [], noJob: false, limit: PAGE_STEP },
   imp: { rows: [], file: '' },
   audit: null,
+  replace: { __bulk: '', __hub: true, __purge: false },
   reports: []
 };
 
@@ -51,7 +52,7 @@ function paintBanner() {
     ? `<div class="notice"><b>${esc(S.queue.text)}</b>${S.queue.pct != null ? `<div class="progress"><div style="width:${Math.max(0, Math.min(100, S.queue.pct))}%"></div></div>` : ''}</div>`
     : '';
 }
-function flash(text) { setQueue(text); setTimeout(() => { if (S.queue && S.queue.text === text) setQueue(null); }, 7000); }
+function flash(text) { setQueue(text); setTimeout(() => { if (S.queue && S.queue.text === text) setQueue(null); }, 9000); }
 function showError(msg) { const el = $('#err'); if (el) el.innerHTML = msg ? `<div class="error">${esc(msg)} <button class="x" data-act="clearError">Dismiss</button></div>` : ''; }
 
 function tbl(heads, rows, empty) {
@@ -146,7 +147,7 @@ const TABS = [
 
 function render() {
   $('#app').innerHTML = `<div class="layout">
-    <aside class="side"><div class="brand">Company Manage<small>v32 &middot; Hub administration</small></div>
+    <aside class="side"><div class="brand">Company Manage<small>v33 &middot; Hub administration</small></div>
       <nav>${TABS.map(([id, label]) => `<button data-act="nav" data-tab="${id}" class="${S.tab === id ? 'on' : ''}">${label}</button>`).join('')}</nav></aside>
     <main class="main">
       <header class="head"><h1>${esc(TABS.find((t) => t[0] === S.tab)[1])}</h1>
@@ -187,7 +188,7 @@ VIEWS.dashboard = () => {
     ${quick('noMembers', 'Companies with no members', noMem.toLocaleString())}${quick('unused', 'Unused (no members, no projects)', unused.toLocaleString())}
     ${quick('noImage', 'Companies without a logo', noImg.toLocaleString())}${quick('dupes', 'Possible duplicate names', '&#8943;')}</div></div>
   <div class="card"><h3>What each tab does</h3><ul class="steps">
-    <li><b>Company Directory</b> - filter every company, add ERP/Tax IDs, upload logos, click Members/Projects for a full audit, auto rename, bulk ERP/Tax from Excel, remove members and purge.</li>
+    <li><b>Company Directory</b> - filter every company, add ERP/Tax IDs, upload logos, click Members/Projects for a full audit, <b>replace one company with another</b> (moves every member in every project), auto rename, bulk ERP/Tax from Excel, remove members and purge.</li>
     <li><b>Import Companies</b> - validate and import Excel files with every company field Autodesk accepts.</li>
     <li><b>Users &amp; Access</b> - select multiple projects, load their users, search, change roles or remove access in bulk.</li>
     <li><b>User Removal</b> - pick a Hub user, see every project, remove from selected or all projects, then remove from the Hub.</li>
@@ -198,7 +199,7 @@ VIEWS.dashboard = () => {
 
 /* ------------------------------------------------------ company directory */
 VIEWS.companies = () => {
-  const rows = filteredCompanies(), f = S.cf, shown = rows.slice(0, S.cLimit);
+  const rows = filteredCompanies(), f = S.cf, shown = rows.slice(0, S.cLimit), R = S.replace;
   return `<div class="card">
     <div class="bar"><input id="cSearch" class="input grow" data-in="cSearch" placeholder="Search company name, trade, ERP ID or Tax ID" value="${esc(f.search)}">
       <select class="select" data-ch="cStatus">${['all', 'active', 'inactive', 'deleted'].map((s) => `<option value="${s}" ${f.status === s ? 'selected' : ''}>${s === 'all' ? 'All statuses' : s[0].toUpperCase() + s.slice(1)}</option>`).join('')}</select>
@@ -213,7 +214,13 @@ VIEWS.companies = () => {
       <button class="btn soft" data-act="autoRename">Auto Rename</button>
       <button class="btn light" data-act="bulkErpTax">Bulk ERP / Tax from Excel</button>
       <button class="btn danger" data-act="deepPurge">Remove Members + Purge</button></div>
-    ${tbl(['Select', 'Logo', 'Company', 'Trade', 'ERP ID', 'Tax ID', 'Status', 'Members', 'Projects', 'Logo upload'],
+    <datalist id="companyOptions">${companyOptions()}</datalist>
+    <div class="bar replacebar"><b>Replace selected companies with</b>
+      <input id="bulkReplace" class="input grow" list="companyOptions" data-in="bulkReplace" placeholder="Type to search the target company..." value="${esc(R.__bulk)}">
+      <label class="chip"><input type="checkbox" data-ch="optHub" ${R.__hub ? 'checked' : ''}> Also change Hub default company</label>
+      <label class="chip"><input type="checkbox" data-ch="optPurge" ${R.__purge ? 'checked' : ''}> Delete old company afterwards</label>
+      <button class="btn" data-act="replaceSelected">Move Members of Selected</button></div>
+    ${tbl(['Select', 'Logo', 'Company', 'Trade', 'ERP ID', 'Tax ID', 'Status', 'Members', 'Projects', 'Replace with (moves all members)', 'Logo upload'],
       shown.map((c) => [rowBox('cSel', c.id, S.cSel.has(c.id)),
         c.imageUrl ? `<img class="logo" src="${esc(c.imageUrl)}" alt="">` : '<span class="muted">-</span>',
         esc(c.name), esc(c.trade),
@@ -222,6 +229,7 @@ VIEWS.companies = () => {
         `<span class="badge">${esc(c.status || 'active')}</span>`,
         `<button class="btn soft small" data-act="audit" data-id="${esc(c.id)}">${c.members} member${c.members === 1 ? '' : 's'}</button>`,
         `<button class="btn soft small" data-act="audit" data-id="${esc(c.id)}">${c.projects} project${c.projects === 1 ? '' : 's'}</button>`,
+        `<div class="replacecell"><input id="rep_${esc(c.id)}" class="input small" list="companyOptions" data-in="replace" data-id="${esc(c.id)}" placeholder="Choose company..." value="${esc(R[c.id] || '')}"><button class="btn small" data-act="replaceOne" data-id="${esc(c.id)}">Move</button></div>`,
         `<label class="btn light small">Logo<input type="file" accept="image/*" hidden data-ch="logo" data-id="${esc(c.id)}"></label>`]),
       S.companiesLoaded ? 'No companies match the current filters.' : 'Select Load All Companies. Large directories load in safe groups of 1,000 with a 5-second pause.')}
     ${moreBtn('cLimit', shown.length, rows.length)}</div>`;
@@ -493,6 +501,112 @@ async function deepPurge() {
   flash(`Purge complete: ${deleted.size} deleted, ${selected.length - deleted.size} kept. See Reports.`); renderView();
 }
 
+/* --- replace / merge company (moves members in every project) */
+const companyLabel = (c) => `${c.name}  [${String(c.id).slice(0, 8)}]`;
+let OPTION_CACHE = { key: '', html: '' };
+function companyOptions() {
+  const live = S.companies.filter((c) => c.status !== 'deleted');
+  const key = live.length + '|' + live.reduce((n, c) => n + c.name.length, 0);
+  if (OPTION_CACHE.key !== key) {
+    OPTION_CACHE = { key, html: live.slice().sort((a, b) => a.name.localeCompare(b.name)).map((c) => `<option value="${esc(companyLabel(c))}"></option>`).join('') };
+  }
+  return OPTION_CACHE.html;
+}
+function resolveCompany(text) {
+  const t = String(text || '').trim();
+  if (!t) return null;
+  const live = S.companies.filter((c) => c.status !== 'deleted');
+  const exact = live.find((c) => companyLabel(c) === t);
+  if (exact) return exact;
+  const byName = live.filter((c) => norm(c.name) === norm(t));
+  return byName.length === 1 ? byName[0] : null;
+}
+
+async function moveCompanies(sources, target) {
+  const opts = { hub: S.replace.__hub !== false, purge: !!S.replace.__purge };
+  const ids = sources.map((c) => c.id);
+  const names = sources.map((c) => c.name).join(', ');
+  const msg = `Move every project member of:\n${names.length > 300 ? sources.length + ' companies' : names}\n\nto: ${target.name}\n\n` +
+    (opts.hub ? 'Hub default company will also change.\n' : '') +
+    (opts.purge ? `The old compan${sources.length === 1 ? 'y' : 'ies'} will then be deleted.\n` : '') + '\nContinue?';
+  if (!confirm(msg)) return;
+
+  // 1. find every membership of the source companies across all projects
+  const { found, errors } = await scanMemberships(ids, (a, b) => setQueue(`Finding members in projects: ${a} of ${b}`, 100 * a / b));
+
+  // 2. move each project membership to the target company
+  const moved = [];
+  for (let i = 0; i < found.length; i += 25) {
+    const d = await api('members-bulk', { body: { operation: 'company', companyId: target.id, items: found.slice(i, i + 25) } });
+    moved.push(...d.results);
+    setQueue(`Moving project members: ${Math.min(i + 25, found.length)} of ${found.length}`, 100 * Math.min(i + 25, found.length) / found.length);
+  }
+  pushReports(moved.map((r) => ({ Type: 'Replace company (project)', Name: r.email || r.name, Project: r.projectName, Result: r.success ? 'Success' : 'Failed', Detail: r.success ? `-> ${target.name}` : r.error })));
+
+  // 3. change Hub default company for users whose default is a source company
+  const hubMoved = [];
+  if (opts.hub) {
+    if (!S.user.loaded) { S.busyLock = false; await loadHubUsers(); }
+    const hubUsers = S.user.users.filter((u) => ids.includes(u.companyId));
+    for (let i = 0; i < hubUsers.length; i += 25) {
+      const d = await api('bulk-user-company', { body: { hubId: S.hub, companyId: target.id, companyName: target.name, users: hubUsers.slice(i, i + 25) } });
+      hubMoved.push(...d.results);
+      setQueue(`Changing Hub default company: ${Math.min(i + 25, hubUsers.length)} of ${hubUsers.length}`, 100 * Math.min(i + 25, hubUsers.length) / hubUsers.length);
+    }
+    const okHub = new Set(hubMoved.filter((r) => r.success).map((r) => r.id));
+    S.user.users.forEach((u) => { if (okHub.has(u.id)) { u.company = target.name; u.companyId = target.id; } });
+    pushReports(hubMoved.map((r) => ({ Type: 'Replace company (Hub default)', Name: r.email, Result: r.success ? 'Success' : 'Failed', Detail: r.success ? `${r.oldCompany || '(none)'} -> ${target.name}` : r.error })));
+  }
+
+  // 4. update counts locally; optionally delete sources that are now empty
+  const okKeys = new Set(moved.filter((r) => r.success).map((r) => r.key));
+  const failedBySource = new Map();
+  found.forEach((m) => { if (!okKeys.has(m.key)) failedBySource.set(m.companyId, (failedBySource.get(m.companyId) || 0) + 1); });
+  const movedProjects = new Set(found.filter((m) => okKeys.has(m.key)).map((m) => m.projectId));
+  target.members += okKeys.size;
+  target.projects = Math.max(target.projects, movedProjects.size);
+  sources.forEach((c) => { if (!failedBySource.get(c.id) && !errors.length) { c.members = 0; c.projects = 0; } });
+
+  let purged = 0;
+  if (opts.purge) {
+    const clean = sources.filter((c) => !failedBySource.get(c.id) && !errors.length);
+    if (clean.length) {
+      const d = await api('companies-purge', { body: { hubId: S.hub, companies: clean } });
+      const ok = new Set(d.results.filter((r) => r.success).map((r) => r.id));
+      purged = ok.size;
+      S.companies = S.companies.filter((c) => !ok.has(c.id));
+      pushReports(d.results.map((r) => ({ Type: 'Replace company (delete old)', Name: r.name, Result: r.success ? 'Success' : 'Failed', Detail: r.error || '' })));
+    }
+    sources.filter((c) => !clean.includes(c)).forEach((c) => pushReports([{ Type: 'Replace company (delete old)', Name: c.name, Result: 'Pending', Detail: 'Not deleted because some members could not be moved or some projects could not be read.' }]));
+  }
+  if (errors.length) pushReports(errors.map((e) => ({ Type: 'Replace company (scan)', Project: e.projectName, Result: 'Failed', Detail: e.error })));
+
+  ids.forEach((id) => { delete S.replace[id]; S.cSel.delete(id); });
+  S.replace.__bulk = '';
+  const failed = found.length - okKeys.size;
+  flash(`Replace complete: ${okKeys.size} project membership(s) moved to ${target.name}${failed ? `, ${failed} failed` : ''}` +
+    (opts.hub ? `, ${hubMoved.filter((r) => r.success).length} Hub default(s) changed` : '') +
+    (opts.purge ? `, ${purged} old compan${purged === 1 ? 'y' : 'ies'} deleted` : '') +
+    (errors.length ? `. ${errors.length} project(s) could not be read - see Reports.` : '.'));
+  renderView();
+}
+
+async function replaceOne(id) {
+  const src = S.companies.find((c) => c.id === id);
+  const typed = S.replace[id] || ($('#rep_' + id) || {}).value;
+  const target = resolveCompany(typed);
+  if (!target) return showError('Choose the replacement company from the list (start typing its name, then pick it).');
+  if (target.id === src.id) return showError('The replacement company must be a different company.');
+  await moveCompanies([src], target);
+}
+async function replaceSelected() {
+  const target = resolveCompany(S.replace.__bulk);
+  if (!target) return showError('Choose the target company from the list (start typing its name, then pick it).');
+  const sources = filteredCompanies().filter((c) => S.cSel.has(c.id) && c.id !== target.id);
+  if (!sources.length) return showError('Select one or more companies to replace (the target itself is excluded).');
+  await moveCompanies(sources, target);
+}
+
 /* ---------------------------------------------------------- import */
 const IMPORT_COLUMNS = [['Name', 'name'], ['Trade', 'trade'], ['Address Line 1', 'address_line_1'], ['Address Line 2', 'address_line_2'], ['City', 'city'], ['State or Province', 'state_or_province'], ['Postal Code', 'postal_code'], ['Country', 'country'], ['Phone', 'phone'], ['Website URL', 'website_url'], ['Description', 'description'], ['ERP ID', 'erp_id'], ['Tax ID', 'tax_id']];
 VIEWS.import = () => {
@@ -594,7 +708,7 @@ async function changeRole() {
   const roleMap = new Map();
   a.members.forEach((m) => m.roles.forEach((r) => { if (r.id) roleMap.set(`${m.projectId}::${r.name}`, r.id); }));
   const sendable = [], unresolved = [];
-  items.forEach((m) => { const id = roleMap.get(`${m.projectId}::${role}`); id ? sendable.push({ ...m, roleIds: [id] }) : unresolved.push(m); });
+  items.forEach((m) => { const id = roleMap.get(`${m.projectId}::${role}`); if (id) sendable.push({ ...m, roleIds: [id] }); else unresolved.push(m); });
   const out = [];
   for (let i = 0; i < sendable.length; i += 25) {
     const d = await api('members-bulk', { body: { operation: 'role', items: sendable.slice(i, i + 25) } });
@@ -667,8 +781,8 @@ VIEWS.bulk = () => {
   const current = [...new Set(S.user.users.map((x) => x.company).filter(Boolean))].sort();
   const targets = S.companies.filter((c) => c.status !== 'deleted');
   const target = S.companies.find((c) => c.id === b.target);
-  const count = [...b.sel].length;
-  return `<div class="notice">Changes each selected user's <b>default Hub company</b>. Users can come from many different companies; all move to one target.</div>
+  const count = b.sel.size;
+  return `<div class="notice">Changes each selected user's <b>default Hub company</b>. Users can come from many different companies; all move to one target. To move a whole company's project members, use <b>Replace with</b> in the Company Directory.</div>
   <div class="card"><div class="bar"><button class="btn" data-act="loadHubUsers">${S.user.loaded ? 'Reload Hub Users' : 'Load Hub Users'}</button>
       <button class="btn" data-act="loadCompanies">${S.companiesLoaded ? 'Reload Companies' : 'Load Companies'}</button>
       <input id="bSearch" class="input grow" data-in="bSearch" placeholder="Search name, email, company or status" value="${esc(b.search)}">
@@ -747,7 +861,7 @@ async function jobApply() {
 VIEWS.reports = () => {
   const r = S.reports, ok = r.filter((x) => x.Result === 'Success').length, bad = r.filter((x) => x.Result === 'Failed').length;
   return `<div class="card"><h3>Comprehensive Hub User Project Register</h3>
-    <p class="muted">One Excel workbook listing every Hub user, every project they belong to, their company on each project and their role names. It loads all projects and memberships in fast batches. Sheets: Hub Users, User Project Memberships, Users by Company, Roles Summary, Projects, Companies (if loaded), Users Without Projects, Exceptions.</p>
+    <p class="muted">One Excel workbook listing every Hub user, every project they belong to, their company on each project and their role names. Sheets: Hub Users, User Project Memberships, Users by Company, Roles Summary, Projects, Companies (if loaded), Users Without Projects, Exceptions.</p>
     <div class="bar"><button class="btn" data-act="buildRegister">Build Register Workbook</button></div></div>
   <div class="card"><div class="bar"><h3 class="grow">Action log</h3><span class="badge good">${ok} success</span><span class="badge bad">${bad} failed</span>
       <button class="btn light" data-act="exportReports" ${r.length ? '' : 'disabled'}>Export Excel</button><button class="btn light" data-act="clearReports" ${r.length ? '' : 'disabled'}>Clear</button></div>
@@ -773,9 +887,10 @@ async function buildRegister() {
     return { 'User': m.name, 'Email': m.email, 'Hub company': hu.company || '', 'Hub status': hu.status || '', 'Project': m.projectName, 'Project status': m.projectStatus, 'Company on project': m.company, 'Role names': roleNames(m.roles), 'Role IDs': m.roles.map((r) => r.id).filter(Boolean).join(', '), 'Products': (m.products || []).join(', '), 'Member status': m.status, 'Project ID': m.projectId, 'User ID': m.userId };
   });
   rows.sort((a, b) => String(a['Hub company']).localeCompare(String(b['Hub company'])) || String(a.User).localeCompare(String(b.User)) || String(a.Project).localeCompare(String(b.Project)));
-  const byCompany = new Map(), byRole = new Map(), usersWithProjects = new Set();
+  const byCompany = new Map(), byRole = new Map(), usersWithProjects = new Set(), perProject = new Map();
   memberships.forEach((m) => {
     usersWithProjects.add(norm(m.email));
+    perProject.set(m.projectId, (perProject.get(m.projectId) || 0) + 1);
     const ck = m.company || '(No company)', c = byCompany.get(ck) || { users: new Set(), projects: new Set(), count: 0 };
     c.users.add(norm(m.email)); c.projects.add(m.projectId); c.count++; byCompany.set(ck, c);
     (m.roles.length ? m.roles : [{ name: '(No role)' }]).forEach((r) => { const k = r.name, x = byRole.get(k) || { users: new Set(), count: 0 }; x.users.add(norm(m.email)); x.count++; byRole.set(k, x); });
@@ -785,7 +900,7 @@ async function buildRegister() {
   addSheet(wb, 'User Project Memberships', rows);
   addSheet(wb, 'Users by Company', [...byCompany].map(([k, v]) => ({ Company: k, 'Distinct users': v.users.size, 'Projects': v.projects.size, 'Memberships': v.count })).sort((a, b) => b.Memberships - a.Memberships));
   addSheet(wb, 'Roles Summary', [...byRole].map(([k, v]) => ({ Role: k, 'Distinct users': v.users.size, Memberships: v.count })).sort((a, b) => b.Memberships - a.Memberships));
-  addSheet(wb, 'Projects', S.projects.map((p) => ({ Project: p.name, 'Job number': p.jobNumber, Status: p.status, Classification: p.classification, Members: memberships.filter((m) => m.projectId === p.id).length, 'Project ID': p.id })));
+  addSheet(wb, 'Projects', S.projects.map((p) => ({ Project: p.name, 'Job number': p.jobNumber, Status: p.status, Classification: p.classification, Members: perProject.get(p.id) || 0, 'Project ID': p.id })));
   if (S.companiesLoaded) addSheet(wb, 'Companies', S.companies.map((c) => ({ Company: c.name, Trade: c.trade, 'ERP ID': c.erpId, 'Tax ID': c.taxId, Status: c.status, Members: c.members, Projects: c.projects, 'Company ID': c.id })));
   addSheet(wb, 'Users Without Projects', S.user.users.filter((u) => !usersWithProjects.has(norm(u.email))).map((u) => ({ Name: u.name, Email: u.email, Company: u.company, Status: u.status })));
   addSheet(wb, 'Exceptions', errors.map((e) => ({ Project: e.projectName, Problem: e.error })));
@@ -817,6 +932,7 @@ const ACT = {
   exportCompanies: () => exportRows('Companies_Filtered.xlsx', filteredCompanies().map((c) => ({ Company: c.name, Trade: c.trade, 'ERP ID': c.erpId, 'Tax ID': c.taxId, Status: c.status, Members: c.members, Projects: c.projects, 'Company ID': c.id })), 'Companies'),
   addField: (el) => addField(el.dataset.kind, el.dataset.id), saveField: (el) => saveField(el.dataset.kind, el.dataset.id),
   autoRename, deepPurge, bulkErpTax, applyErp,
+  replaceOne: (el) => replaceOne(el.dataset.id), replaceSelected,
   erpTemplate: () => exportRows('ERP_Tax_Update_Template.xlsx', ERP_TEMPLATE, 'Template'),
   audit: (el) => runAudit(el.dataset.id),
   auditSelectAll: () => { const st = S.audit; st.members.filter((m) => hasText([m.projectName, m.projectStatus, m.name, m.email, m.status, roleNames(m.roles)], (st.search || '').toLowerCase())).forEach((m) => st.sel.add(m.key)); paintAudit(); },
@@ -837,6 +953,7 @@ const ACT = {
 };
 
 const rerender = debounce(renderView, 160);
+const debouncedAudit = debounce(() => { if (S.audit) paintAudit(); }, 200);
 const IN = {
   cSearch: (el) => { S.cf.search = el.value; S.cLimit = PAGE_STEP; rerender(); },
   pSearch: (el) => { S.access.pSearch = el.value; rerender(); },
@@ -846,18 +963,20 @@ const IN = {
   bSearch: (el) => { S.bulk.search = el.value; S.bulk.limit = PAGE_STEP; S.bulk.preview = false; rerender(); },
   jSearch: (el) => { S.jobs.search = el.value; S.jobs.limit = PAGE_STEP; rerender(); },
   jValue: (el) => { S.jobs.value = el.value; },
+  replace: (el) => { S.replace[el.dataset.id] = el.value; },
+  bulkReplace: (el) => { S.replace.__bulk = el.value; },
   auditSearch: (el) => { S.audit.search = el.value; debouncedAudit(); }
 };
-const debouncedAudit = debounce(() => { if (S.audit) paintAudit(); }, 200);
 
 const CH = {
   hub: (el) => { S.hub = el.value; S.companies = []; S.companiesLoaded = false; S.projects = []; S.projectsLoaded = false; S.user.users = []; S.user.loaded = false; S.access.members = []; renderView(); },
-  row: (el) => { const set = SETS()[el.dataset.set]; el.checked ? set.add(el.dataset.id) : set.delete(el.dataset.id); if (el.dataset.set === 'bulkSel') S.bulk.preview = false; paintCounts(); },
+  row: (el) => { const set = SETS()[el.dataset.set]; if (el.checked) set.add(el.dataset.id); else set.delete(el.dataset.id); if (el.dataset.set === 'bulkSel') S.bulk.preview = false; paintCounts(); },
   cf: (el) => { S.cf[el.dataset.k] = el.checked; S.cLimit = PAGE_STEP; renderView(); },
   cStatus: (el) => { S.cf.status = el.value; S.cLimit = PAGE_STEP; renderView(); },
   logo: (el) => uploadLogo(el.dataset.id, el.files[0]),
   erpFile: (el) => erpFile(el.files[0]), importFile: (el) => importFile(el.files[0]),
-  auditRow: (el) => { el.checked ? S.audit.sel.add(el.dataset.key) : S.audit.sel.delete(el.dataset.key); paintAudit(); },
+  auditRow: (el) => { if (el.checked) S.audit.sel.add(el.dataset.key); else S.audit.sel.delete(el.dataset.key); paintAudit(); },
+  optHub: (el) => { S.replace.__hub = el.checked; }, optPurge: (el) => { S.replace.__purge = el.checked; },
   pStatus: (el) => { S.access.pStatus = el.value; renderView(); }, mCompany: (el) => { S.access.mCompany = el.value; renderView(); }, mRole: (el) => { S.access.role = el.value; },
   uCompany: (el) => { S.user.company = el.value; renderView(); },
   bCompany: (el) => { S.bulk.company = el.value; S.bulk.preview = false; renderView(); }, bTarget: (el) => { S.bulk.target = el.value; S.bulk.preview = false; renderView(); },

@@ -18,6 +18,7 @@ body{margin:0;font-family:"Segoe UI",Inter,Arial,sans-serif;background:var(--bg)
 .muted{color:var(--muted)}
 .input,.select{border:1px solid #cfdae6;border-radius:9px;padding:9px 11px;background:#fff;font:inherit;min-height:38px}
 .input:focus,.select:focus{outline:2px solid #bcd3fb;border-color:var(--blue)}
+.input.small{min-height:30px;padding:5px 8px;font-size:12px;width:220px}
 .btn{border:0;border-radius:9px;background:var(--blue);color:#fff;padding:9px 14px;font:inherit;font-weight:700;cursor:pointer;white-space:nowrap}
 .btn:hover{filter:brightness(.95)}
 .btn.light{background:#fff;color:#27425d;border:1px solid #cfdae6}
@@ -27,6 +28,8 @@ body{margin:0;font-family:"Segoe UI",Inter,Arial,sans-serif;background:var(--bg)
 .btn:disabled{opacity:.45;cursor:not-allowed}
 .chips{gap:8px}
 .chip{display:inline-flex;gap:6px;align-items:center;background:#f1f5fb;border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-weight:600;cursor:pointer}
+.replacebar{background:#f6f9ff;border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.replacecell{display:flex;gap:6px;align-items:center;min-width:290px}
 .table{overflow:auto;border:1px solid var(--line);border-radius:11px;max-height:620px;margin-top:8px}
 table{border-collapse:collapse;width:100%;min-width:900px}
 th,td{padding:9px 10px;border-bottom:1px solid #edf1f6;text-align:left;font-size:13px;vertical-align:middle}

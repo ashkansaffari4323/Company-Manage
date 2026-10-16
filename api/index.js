@@ -228,6 +228,7 @@ H['members-bulk'] = async (req, res) => {
     try {
       const url = `${APS}/construction/admin/v1/projects/${m.projectId}/users/${m.userId}`;
       if (op === 'remove') await request('delete', url, t);
+      else if (op === 'company') await request('patch', url, t, { data: { companyId: req.body.companyId }, headers: JSON_HEADERS });
       else await request('patch', url, t, { data: { roleIds: m.roleIds || [] }, headers: JSON_HEADERS });
       return { ...base, success: true };
     } catch (e) {
