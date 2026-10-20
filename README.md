@@ -1,20 +1,23 @@
-# Company Manage v34
+# Company Manage v35
 
 Complete replacement package (one Vercel API function: `api/index.js`).
 
-## New in v34
-- **Searchable company picker** for Replace with, Replace selected, and Bulk User Company target:
-  type to filter 10,000+ companies, arrow keys + Enter, shows members, projects, ERP ID and trade.
-- **Show selected only** toggle on every list (companies, projects, project users, Hub users, user projects, job numbers, replace preview).
-- **Replace company with preview, test and verification**:
-  1. Finds every member of the company across all projects.
-  2. Preview shows ACC (movable) vs BIM 360 (not supported by Autodesk API) rows.
-  3. "Test on 1 member first" moves one member and confirms by reading it back from Autodesk.
-  4. Move selected members, optionally change Hub default company, optionally delete the old company only if fully moved.
-  Every change is read back from Autodesk; rows show "Moved - verified" or the exact error.
+## New in v35: ABN Lookup tab
+Checks Forma companies against the Australian Business Register (official ABN Lookup web services).
+1. If the Forma Tax ID is a valid ABN (checksum verified) it is looked up directly.
+2. Otherwise the company name is searched; results are classed as Exact name match, Close name match,
+   Name match - multiple ABNs, or No match.
+3. Matches can fill the missing Tax ID (ABN), state and postcode in Forma. Optional overwrite of differing values.
+4. ABN and exact-name matches are ticked automatically; close/multiple matches need manual review.
+5. Excel report: Summary, All Companies, Updated, Needs Review, No Match.
 
-## Requirements for changing a member's company
-- Signed-in user must be Project Admin (or Hub Admin) on those projects. Uses the ACC project-user PATCH with `companyId`.
-- BIM 360 projects cannot be changed through the API; change them in BIM 360 Project Admin.
+ABR only publishes STATE and POSTCODE for a business address. Street address, suburb and phone are not available
+from ABR and are never changed.
 
-Vercel: Framework Other | Build `npm run build` | Output `client/dist`. Environment variables: see `.env.example`.
+Requires a free ABN Lookup GUID: register at https://abr.business.gov.au/Tools/WebServices
+Enter it in the ABN Lookup tab (saved in your browser) or set `ABR_GUID` in Vercel.
+
+## Everything from v34
+Company Directory (filters incl. No address, Replace with + verification, Auto Rename, ERP/Tax, Purge), Import,
+Users & Access, User Removal, Bulk User Company, Project Numbers (job_number only), Reports & Excel,
+Select All / Deselect All / Show selected only on every list.
