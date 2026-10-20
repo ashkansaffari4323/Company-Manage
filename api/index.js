@@ -132,8 +132,7 @@ H['companies-import'] = async (req, res) => {
 H['abr-match'] = async (req, res) => {
   const guid = String(req.body.guid || process.env.ABR_GUID || '').trim();
   if (!guid) return res.status(400).json({ message: 'Enter your ABN Lookup GUID (free from abr.business.gov.au) or set ABR_GUID in Vercel.' });
-  const items = (req.body.companies || []).slice(0, 25);
-  res.json({ results: await abr.matchCompanies(items, guid) });
+  res.json({ results: await abr.matchCompanies((req.body.companies || []).slice(0, 25), guid) });
 };
 
 /* ------------------------------------------------------------ projects */

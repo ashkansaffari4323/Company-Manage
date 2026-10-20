@@ -29,7 +29,7 @@ a{color:var(--blue)}
 .chips{gap:8px}
 .chip{display:inline-flex;gap:6px;align-items:center;background:#f1f5fb;border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-weight:600;cursor:pointer;user-select:none}
 .chip.on{background:#e3edff;border-color:#9dbcf5;color:#1f4fb5}
-.replacebar{background:#f6f9ff;border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px}
+.replacebar,.actionbox{background:#f6f9ff;border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px}
 .replacebar p{margin:8px 0 0}
 .replacecell{display:flex;gap:6px;align-items:center;min-width:300px}
 .combo{position:relative;flex:1;min-width:200px}
@@ -52,8 +52,9 @@ th{position:sticky;top:0;background:#f7f9fc;color:#506277;font-size:11px;text-tr
 tr:hover td{background:#fafcff}
 td.empty{text-align:center;color:var(--muted);padding:34px}
 .logo{width:30px;height:30px;border-radius:7px;object-fit:cover}
-.badge{display:inline-block;padding:5px 10px;border-radius:999px;background:#edf2f7;color:#40536a;font-size:12px;font-weight:700}
+.badge{display:inline-block;padding:5px 10px;border-radius:999px;background:#edf2f7;color:#40536a;font-size:12px;font-weight:700;border:1px solid transparent;font-family:inherit}
 .badge.good{background:#e4f6ec;color:#17703f}.badge.warn{background:#fff3d9;color:#8a5a00}.badge.bad{background:#ffe6e3;color:#a8322a}
+.badge.clickable{cursor:pointer}.badge.clickable:hover{border-color:#9dbcf5}.badge.sel{border-color:var(--blue);box-shadow:0 0 0 2px #cfe0ff}
 .ok{color:#17703f;font-weight:600}.bad{color:#b3261e;font-weight:600}
 .notice{background:#eaf3ff;color:#1f5a99;border:1px solid #cfe3fb;padding:12px 14px;border-radius:10px;margin:12px 0}
 .error{background:#fff0ee;color:#9f2c24;border:1px solid #ffcdc7;padding:12px 14px;border-radius:10px;margin:12px 0}
@@ -69,7 +70,7 @@ td.empty{text-align:center;color:var(--muted);padding:34px}
 .quick b{display:block;font-size:24px}.quick span{color:var(--muted)}.quick:hover:not(:disabled){border-color:var(--blue)}
 .steps{padding-left:18px;line-height:1.7}
 .empty-state{text-align:center;padding:40px}
-.dangerbox{border:1px solid #f1b8b2;background:#fff8f7;border-radius:12px;padding:14px;margin-top:16px}
+.dangerbox{border:1px solid #f1b8b2;background:#fff8f7;border-radius:12px;padding:12px 14px;margin:10px 0}
 .modal{position:fixed;inset:0;background:rgba(10,30,50,.55);display:grid;place-items:center;z-index:50;padding:16px}
 .modalbox{background:#fff;border-radius:16px;padding:20px;width:min(640px,96vw);max-height:92vh;overflow:auto}
 .modalbox.wide{width:min(1150px,97vw)}

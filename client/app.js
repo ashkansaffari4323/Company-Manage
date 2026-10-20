@@ -1,5 +1,5 @@
 'use strict';
-/* Company Manage v35 - admin console for Autodesk Construction Cloud / BIM 360 */
+/* Company Manage v36 - admin console for Autodesk Construction Cloud / BIM 360 */
 
 const API = '/api/index?action=';
 const PAGE_STEP = 300;
@@ -189,9 +189,29 @@ const bulkUsers = () => onlySel('bulkSel', searchHubUsers(S.bulk.search, S.bulk.
 const userProjects = () => onlySel('uProjSel', S.user.projects.filter((p) => hasText([p.projectName, p.status, roleNames(p.roles)], S.user.pSearch.trim().toLowerCase())), (p) => p.projectId);
 const filteredJobs = () => onlySel('jobSel', searchProjects(S.jobs.search, 'all').filter((p) => !S.jobs.noJob || !p.jobNumber), (p) => p.id);
 const moveRows = () => (S.move ? onlySel('moveSel', S.move.rows.filter((r) => hasText([r.projectName, r.name, r.email, r.company], (S.move.search || '').toLowerCase())), (r) => r.key) : []);
+
+/* --- ABN result categories used by the ABN Lookup filter */
+const MATCH_TYPES = ['ABN match', 'Exact name match', 'Close name match', 'Name match - multiple ABNs', 'No match', 'Lookup error'];
+const isCancelled = (r) => !!(r.abr && !/active/i.test(r.abr.status));
+const isNoMatch = (r) => r.match === 'No match' || r.match === 'Lookup error';
+const isReview = (r) => r.match === 'Close name match' || r.match === 'Name match - multiple ABNs' || /different/.test(r.note || '');
+const isReady = (r) => !!r.changes && (r.match === 'ABN match' || r.match === 'Exact name match') && !/different/.test(r.note || '');
+const isDeleted = (r) => r.result === 'Deleted';
+const ABN_FILTERS = [
+  ['all', 'All results', () => true],
+  ['problems', 'Cancelled + not matched', (r) => !isDeleted(r) && (isCancelled(r) || isNoMatch(r))],
+  ['cancelled', 'Cancelled / inactive ABN', (r) => !isDeleted(r) && isCancelled(r)],
+  ['nomatch', 'Not matched (no match or lookup error)', (r) => !isDeleted(r) && isNoMatch(r)],
+  ['review', 'Needs review (close, multiple ABNs, name different)', (r) => !isDeleted(r) && isReview(r)],
+  ['ready', 'Ready to apply (ABN / exact match with changes)', (r) => !isDeleted(r) && isReady(r)],
+  ['changes', 'Any row with changes to apply', (r) => !isDeleted(r) && !!r.changes],
+  ...MATCH_TYPES.map((t) => [t, t, (r) => !isDeleted(r) && r.match === t]),
+  ['deleted', 'Deleted in this session', (r) => isDeleted(r)]
+];
 function abnRows() {
   const A = S.abn, q = A.search.trim().toLowerCase();
-  return onlySel('abnSel', A.rows.filter((r) => (A.match === 'all' || r.match === A.match || (A.match === 'changes' && r.changes)) && hasText([r.name, r.taxId, r.abr && r.abr.entityName, r.abr && r.abr.abn, r.note], q)), (r) => r.id);
+  const f = (ABN_FILTERS.find((x) => x[0] === A.match) || ABN_FILTERS[0])[2];
+  return onlySel('abnSel', A.rows.filter((r) => f(r) && hasText([r.name, r.taxId, r.abr && r.abr.entityName, r.abr && r.abr.abn, r.note, r.match], q)), (r) => r.id);
 }
 
 /* ---------------------------------------------------------------- shell */
@@ -200,7 +220,7 @@ const TABS = [['dashboard', 'Dashboard'], ['companies', 'Company Directory'], ['
 function render() {
   comboClose();
   $('#app').innerHTML = `<div class="layout">
-    <aside class="side"><div class="brand">Company Manage<small>v35 &middot; Hub administration</small></div>
+    <aside class="side"><div class="brand">Company Manage<small>v36 &middot; Hub administration</small></div>
       <nav>${TABS.map(([id, label]) => `<button data-act="nav" data-tab="${id}" class="${S.tab === id ? 'on' : ''}">${label}</button>`).join('')}</nav></aside>
     <main class="main">
       <header class="head"><h1>${esc(TABS.find((t) => t[0] === S.tab)[1])}</h1>
@@ -239,7 +259,7 @@ VIEWS.dashboard = () => {
     ${quick('unused', 'Unused (no members, no projects)', unused.toLocaleString())}${quick('noImage', 'Companies without a logo', noImg.toLocaleString())}</div></div>
   <div class="card"><h3>What each tab does</h3><ul class="steps">
     <li><b>Company Directory</b> - filters, ERP/Tax IDs, logos, Members/Projects audit, Replace with (verified), Auto Rename, Bulk ERP/Tax, Remove Members + Purge.</li>
-    <li><b>ABN Lookup</b> - checks every company against the Australian Business Register by ABN or name, fills missing ABN, state and postcode, and produces a report.</li>
+    <li><b>ABN Lookup</b> - checks every company against the Australian Business Register, fills missing ABN, state and postcode, filters cancelled or unmatched companies and can remove them, and produces a report.</li>
     <li><b>Import Companies</b> - validate and import Excel files with every company field.</li>
     <li><b>Users &amp; Access</b>, <b>User Removal</b>, <b>Bulk User Company</b>, <b>Project Numbers</b>, <b>Reports &amp; Excel</b>.</li></ul></div>`;
 };
@@ -430,21 +450,16 @@ async function applyErp() {
 }
 
 /* ======================================================== ABN LOOKUP */
-const MATCH_TYPES = ['ABN match', 'Exact name match', 'Close name match', 'Name match - multiple ABNs', 'No match', 'Lookup error'];
-const AUTO_SELECT = new Set(['ABN match', 'Exact name match']);
-
 function abnScope() {
   const A = S.abn;
   if (A.scope === 'selected') return S.companies.filter((c) => S.cSel.has(c.id));
   if (A.scope === 'all') return liveCompanies();
   return filteredCompanies().filter((c) => c.status !== 'deleted');
 }
-
-/* What would change in Forma for this row, given the current options. */
 function abnChanges(r) {
   const A = S.abn, c = companyById(r.id), d = r.abr;
   const out = {};
-  if (!c || !d || !/active/i.test(d.status)) return out;
+  if (!c || !d || !/active/i.test(d.status) || isDeleted(r)) return out;
   const digits = String(c.taxId || '').replace(/\D/g, '');
   if (A.opts.fillTax && (!c.taxId || (A.opts.overwrite && digits !== d.abn))) out.tax_id = fmtAbn(d.abn);
   if (A.opts.address) {
@@ -454,17 +469,20 @@ function abnChanges(r) {
   }
   return out;
 }
-function refreshAbnChanges() { S.abn.rows.forEach((r) => { r.changes = Object.keys(abnChanges(r)).length ? abnChanges(r) : null; }); }
+function refreshAbnChanges() { S.abn.rows.forEach((r) => { const ch = abnChanges(r); r.changes = Object.keys(ch).length ? ch : null; }); }
 
 VIEWS.abn = () => {
   const A = S.abn, scope = abnScope(), rows = abnRows(), shown = rows.slice(0, A.limit);
-  const counts = MATCH_TYPES.map((t) => [t, A.rows.filter((r) => r.match === t).length]).filter(([, n]) => n);
-  const withChanges = A.rows.filter((r) => r.changes).length;
+  const live = A.rows.filter((r) => !isDeleted(r));
+  const counts = MATCH_TYPES.map((t) => [t, live.filter((r) => r.match === t).length]).filter(([, n]) => n);
+  const nCancelled = live.filter(isCancelled).length, nNoMatch = live.filter(isNoMatch).length, nDeleted = A.rows.filter(isDeleted).length;
   const pct = A.total ? Math.round(100 * A.done / A.total) : 0;
+  const selRows = A.rows.filter((r) => A.sel.has(r.id) && !isDeleted(r));
   const changeText = (r) => (r.changes ? Object.entries(r.changes).map(([k, v]) => `<div><span class="muted small">${{ tax_id: 'Tax ID', state_or_province: 'State', postal_code: 'Postcode', country: 'Country' }[k]}</span> ${esc(v)}</div>`).join('') : '<span class="muted">-</span>');
   const matchCls = (m) => (m === 'ABN match' || m === 'Exact name match' ? 'good' : m === 'Close name match' || m.startsWith('Name match') ? 'warn' : 'bad');
+  const quickF = (k, label, n, cls) => `<button class="badge ${cls} clickable ${A.match === k ? 'sel' : ''}" data-act="abnFilter" data-k="${k}">${label}: ${n}</button>`;
   return `<div class="card"><h3>Check companies against the Australian Business Register</h3>
-    <p class="muted">For each company the app first uses the Forma <b>Tax ID</b> if it is a valid ABN. Otherwise it searches ABN Lookup by <b>company name</b>. Matches can fill the missing ABN (Tax ID), <b>state</b> and <b>postcode</b>. ABR does not publish street addresses, so street, suburb and phone are never changed.</p>
+    <p class="muted">The app uses the Forma <b>Tax ID</b> if it is a valid ABN, otherwise it searches ABN Lookup by <b>company name</b>. Matches can fill the missing ABN, <b>state</b> and <b>postcode</b> (ABR does not publish street addresses). Cancelled and unmatched companies can be filtered and removed.</p>
     <div class="bar"><b>ABN Lookup GUID</b>
       <input id="abrGuid" class="input grow" data-in="abrGuid" type="password" placeholder="${S.abrConfigured ? 'Using ABR_GUID from Vercel (optional override)' : 'Paste the GUID emailed to you by ABR'}" value="${esc(A.guid)}">
       <a class="btn light" href="https://abr.business.gov.au/Tools/WebServices" target="_blank" rel="noopener">Get a free GUID</a></div>
@@ -478,26 +496,35 @@ VIEWS.abn = () => {
       ${S.companiesLoaded ? '' : '<button class="btn soft" data-act="loadCompanies">Load companies first</button>'}</div>
     ${A.running || A.done ? `<div class="notice"><b>${A.running ? 'Checking ABN Lookup...' : 'Lookup finished.'}</b> ${A.done} of ${A.total} companies<div class="progress"><div style="width:${pct}%"></div></div></div>` : ''}</div>
   ${A.rows.length ? `<div class="card">
-    <div class="bar chips"><b>Results</b>${counts.map(([t, n]) => `<span class="badge ${matchCls(t)}">${esc(t)}: ${n}</span>`).join('')}<span class="badge">${withChanges} with changes to apply</span></div>
-    <div class="bar"><b>Apply</b>
-      ${chip('fillTax', 'Fill missing Tax ID with ABN', A.opts.fillTax, 'abnOpt')}${chip('address', 'Fill missing state and postcode', A.opts.address, 'abnOpt')}${chip('overwrite', 'Overwrite existing values that differ', A.opts.overwrite, 'abnOpt')}</div>
+    <div class="bar chips"><b>Results</b>${counts.map(([t, n]) => quickF(t, t, n, matchCls(t))).join('')}
+      ${quickF('cancelled', 'Cancelled ABN', nCancelled, 'bad')}${quickF('problems', 'Cancelled + not matched', nCancelled + nNoMatch, 'bad')}
+      ${quickF('ready', 'Ready to apply', live.filter(isReady).length, 'good')}${nDeleted ? quickF('deleted', 'Deleted', nDeleted, '') : ''}${quickF('all', 'All', A.rows.length, '')}</div>
     <div class="bar"><input id="abnSearch" class="input grow" data-in="abnSearch" placeholder="Search company, ABN, ABR name or note" value="${esc(A.search)}">
-      <select class="select" data-ch="abnMatch"><option value="all">All results</option><option value="changes" ${A.match === 'changes' ? 'selected' : ''}>Only rows with changes</option>${MATCH_TYPES.map((t) => `<option ${A.match === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></div>
-    <div class="bar">${selBar('abnSel')}
-      <button class="btn" data-act="abnApply" ${A.running ? 'disabled' : ''}>Apply to Forma</button>
-      <button class="btn light" data-act="abnExport">Export Report</button></div>
-    <p class="muted small">ABN and exact-name matches with changes are ticked automatically. Close and multiple-ABN matches need you to review and tick them yourself.</p>
-    ${tbl(['Select', 'Forma company', 'Forma Tax ID', 'Forma state / postcode', 'Match', 'ABN', 'ABR registered name', 'ABN status', 'ABR state / postcode', 'Changes to apply', 'Note / result'],
+      <select class="select" data-ch="abnMatch">${ABN_FILTERS.map(([k, label]) => `<option value="${esc(k)}" ${A.match === k ? 'selected' : ''}>${esc(label)}</option>`).join('')}</select>
+      <span class="badge">${rows.length.toLocaleString()} shown</span></div>
+    <div class="bar">${selBar('abnSel')}</div>
+    <div class="actionbox">
+      <div class="bar"><b>Update Forma</b>
+        ${chip('fillTax', 'Fill missing Tax ID with ABN', A.opts.fillTax, 'abnOpt')}${chip('address', 'Fill missing state and postcode', A.opts.address, 'abnOpt')}${chip('overwrite', 'Overwrite existing values that differ', A.opts.overwrite, 'abnOpt')}</div>
+      <div class="bar"><button class="btn soft" data-act="abnSelectReady">Select rows ready to apply</button>
+        <button class="btn" data-act="abnApply" ${A.running ? 'disabled' : ''}>Apply ${selRows.filter((r) => r.changes).length} selected updates to Forma</button>
+        <button class="btn light" data-act="abnExport">Export Report</button></div></div>
+    <div class="dangerbox">
+      <div class="bar"><b>Delete companies</b><span class="muted small">Removes every project member of the selected companies, then deletes the companies. Use the filter above (for example <b>Cancelled + not matched</b>), then Select All Filtered.</span></div>
+      <div class="bar"><button class="btn danger" data-act="abnDelete" ${A.running || !selRows.length ? 'disabled' : ''}>Delete ${companies(selRows.length)} selected</button>
+        ${selRows.length ? `<span class="muted small">${selRows.filter(isCancelled).length} cancelled, ${selRows.filter(isNoMatch).length} not matched, ${selRows.filter((r) => !isCancelled(r) && !isNoMatch(r)).length} other &middot; ${selRows.reduce((n, r) => n + ((companyById(r.id) || {}).members || 0), 0)} project members will be removed</span>` : ''}</div></div>
+    ${tbl(['Select', 'Forma company', 'Members / projects', 'Forma Tax ID', 'Match', 'ABN', 'ABR registered name', 'ABN status', 'ABR state / postcode', 'Changes to apply', 'Note / result'],
       shown.map((r) => {
         const d = r.abr, c = companyById(r.id) || {};
-        return [r.changes ? rowBox('abnSel', r.id, A.sel.has(r.id)) : '<span class="muted">-</span>', esc(r.name), esc(c.taxId || r.taxId),
-          esc([c.state, c.postcode].filter(Boolean).join(' ')) || '<span class="muted">-</span>',
+        return [isDeleted(r) ? '<span class="muted">-</span>' : rowBox('abnSel', r.id, A.sel.has(r.id)), esc(r.name),
+          isDeleted(r) ? '<span class="muted">deleted</span>' : `${c.members || 0} / ${c.projects || 0}`,
+          esc(c.taxId || r.taxId),
           `<span class="badge ${matchCls(r.match)}">${esc(r.match)}</span>${r.confidence ? `<div class="muted small">${r.confidence}% name similarity</div>` : ''}`,
           d ? `<a href="https://abr.business.gov.au/ABN/View?abn=${esc(d.abn)}" target="_blank" rel="noopener">${esc(fmtAbn(d.abn))}</a>` : '',
           d ? esc(d.entityName) + (d.businessNames.length ? `<div class="muted small">Trading as: ${esc(d.businessNames.slice(0, 3).join(', '))}</div>` : '') : '',
           d ? `<span class="${/active/i.test(d.status) ? 'ok' : 'bad'}">${esc(d.status)}</span>${d.gst ? '<div class="muted small">GST registered</div>' : ''}` : '',
           d ? esc(`${d.stateCode} ${d.postcode}`.trim()) : '', changeText(r),
-          `${r.note ? esc(r.note) : ''}${r.result ? `<div class="${r.result === 'Updated' ? 'ok' : 'bad'}">${esc(r.result)}${r.error ? ': ' + esc(r.error) : ''}</div>` : ''}`];
+          `${r.note ? esc(r.note) : ''}${r.result ? `<div class="${r.result === 'Updated' || r.result === 'Deleted' ? 'ok' : 'bad'}">${esc(r.result)}${r.error ? ': ' + esc(r.error) : ''}</div>` : ''}`];
       }), 'No rows match.')}
     ${moreBtn('abnLimit', shown.length, rows.length)}</div>` : ''}`;
 };
@@ -506,7 +533,7 @@ async function abnRun() {
   const A = S.abn, list = abnScope();
   if (!list.length) return showError('No companies to check.');
   if (!A.guid && !S.abrConfigured) return showError('Enter your ABN Lookup GUID first. Register free at abr.business.gov.au.');
-  A.rows = []; A.sel.clear(); A.running = true; A.stop = false; A.done = 0; A.total = list.length; renderView();
+  A.rows = []; A.sel.clear(); A.running = true; A.stop = false; A.done = 0; A.total = list.length; A.match = 'all'; renderView();
   try {
     for (let i = 0; i < list.length && !A.stop; i += 20) {
       const chunk = list.slice(i, i + 20).map((c) => ({ id: c.id, name: c.name, taxId: c.taxId, state: c.state, postcode: c.postcode }));
@@ -520,7 +547,6 @@ async function abnRun() {
       A.rows.push(...d.results);
       A.done = Math.min(i + 20, list.length);
       refreshAbnChanges();
-      A.rows.forEach((r) => { if (r.changes && AUTO_SELECT.has(r.match) && !r.autoTicked) { A.sel.add(r.id); r.autoTicked = true; } });
       renderView();
     }
     flash(`ABN Lookup complete: ${A.rows.filter((r) => r.abr).length} of ${A.rows.length} companies matched.`);
@@ -533,7 +559,7 @@ async function abnApply() {
   const A = S.abn;
   refreshAbnChanges();
   const rows = A.rows.filter((r) => A.sel.has(r.id) && r.changes);
-  if (!rows.length) return showError('Tick at least one row that has changes to apply.');
+  if (!rows.length) return showError('Tick at least one row that has changes to apply. Tip: use "Select rows ready to apply".');
   if (!confirm(`Update ${companies(rows.length)} in Forma with ABN Lookup data?`)) return;
   const all = [];
   for (let i = 0; i < rows.length; i += 25) {
@@ -560,18 +586,46 @@ async function abnApply() {
   setQueue(null); flash(`Forma updated: ${ok} companies, ${all.length - ok} failed. Export the report for the full detail.`); renderView();
 }
 
+async function abnDelete() {
+  const A = S.abn;
+  const rows = A.rows.filter((r) => A.sel.has(r.id) && !isDeleted(r));
+  const list = rows.map((r) => companyById(r.id)).filter(Boolean);
+  if (!list.length) return showError('Select the companies to delete first.');
+  const good = rows.filter((r) => !isCancelled(r) && !isNoMatch(r)).length;
+  const members = list.reduce((n, c) => n + (c.members || 0), 0);
+  const msg = `Delete ${companies(list.length)} from Forma?\n\n` +
+    `- ${rows.filter(isCancelled).length} with cancelled ABN\n- ${rows.filter(isNoMatch).length} not matched on ABR\n- ${good} other (matched or needs review)\n\n` +
+    `${members} project member(s) assigned to these companies will be removed from their projects first.\n` +
+    'Not-matched companies may still be genuine (for example overseas suppliers or individuals). Export the report before deleting.\n\nType DELETE to continue.';
+  if (prompt(msg) !== 'DELETE') return;
+  A.running = true; renderView();
+  try {
+    const { deleted, kept } = await purgeCompanyList(list, 'ABN Lookup delete');
+    rows.forEach((r) => {
+      if (deleted.has(r.id)) { r.result = 'Deleted'; r.error = ''; r.changes = null; A.sel.delete(r.id); }
+      else { r.result = 'Not deleted'; r.error = kept.get(r.id) || 'See Reports'; }
+    });
+    flash(`Delete complete: ${deleted.size} deleted, ${list.length - deleted.size} kept. Full detail is in the report and on the Reports tab.`);
+  } catch (e) { showError(e.message); }
+  finally { A.running = false; setQueue(null); renderView(); }
+}
+
 function abnExport() {
   const A = S.abn;
   if (typeof XLSX === 'undefined') return exportRows('ABN_Lookup_Report.xlsx', A.rows.map(abnReportRow), 'Report');
   const wb = XLSX.utils.book_new();
-  const summary = MATCH_TYPES.map((t) => ({ 'Match type': t, Companies: A.rows.filter((r) => r.match === t).length }));
-  summary.push({ 'Match type': 'Updated in Forma', Companies: A.rows.filter((r) => r.result === 'Updated').length });
-  summary.push({ 'Match type': 'Update failed', Companies: A.rows.filter((r) => r.result === 'Failed').length });
+  const summary = MATCH_TYPES.map((t) => ({ Category: t, Companies: A.rows.filter((r) => r.match === t).length }));
+  summary.push({ Category: 'Cancelled / inactive ABN', Companies: A.rows.filter(isCancelled).length });
+  summary.push({ Category: 'Updated in Forma', Companies: A.rows.filter((r) => r.result === 'Updated').length });
+  summary.push({ Category: 'Deleted from Forma', Companies: A.rows.filter(isDeleted).length });
+  summary.push({ Category: 'Update or delete failed', Companies: A.rows.filter((r) => r.result === 'Failed' || r.result === 'Not deleted').length });
   addSheet(wb, 'Summary', summary);
   addSheet(wb, 'All Companies', A.rows.map(abnReportRow));
   addSheet(wb, 'Updated', A.rows.filter((r) => r.result === 'Updated').map(abnReportRow));
-  addSheet(wb, 'Needs Review', A.rows.filter((r) => ['Close name match', 'Name match - multiple ABNs'].includes(r.match) || (r.abr && !/active/i.test(r.abr.status)) || /different/.test(r.note || '')).map(abnReportRow));
-  addSheet(wb, 'No Match', A.rows.filter((r) => r.match === 'No match' || r.match === 'Lookup error').map(abnReportRow));
+  addSheet(wb, 'Deleted', A.rows.filter(isDeleted).map(abnReportRow));
+  addSheet(wb, 'Cancelled ABN', A.rows.filter(isCancelled).map(abnReportRow));
+  addSheet(wb, 'Needs Review', A.rows.filter(isReview).map(abnReportRow));
+  addSheet(wb, 'No Match', A.rows.filter(isNoMatch).map(abnReportRow));
   XLSX.writeFile(wb, `ABN_Lookup_Report_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 function abnReportRow(r) {
@@ -583,7 +637,7 @@ function abnReportRow(r) {
     'ABR state': d.state || '', 'ABR postcode': d.postcode || '',
     'Changes proposed': r.changes ? Object.entries(r.changes).map(([k, v]) => `${k}=${v}`).join('; ') : '',
     'Changes applied': r.applied ? Object.entries(r.applied).map(([k, v]) => `${k}=${v}`).join('; ') : '',
-    'Update result': r.result || 'Not applied', 'Error': r.error || '', Note: r.note || '',
+    'Result': r.result || 'No action', 'Error': r.error || '', Note: r.note || '',
     'Forma Tax ID (now)': c.taxId || '', 'Forma state (now)': c.state || '', 'Forma postcode (now)': c.postcode || '', 'Company ID': r.id
   };
 }
@@ -642,9 +696,9 @@ async function removeMemberships(items, label) {
   for (let i = 0; i < items.length; i += 25) {
     const d = await api('members-bulk', { body: { operation: 'remove', items: items.slice(i, i + 25) } });
     out.push(...d.results);
-    setQueue(`${label}: ${Math.min(i + 25, items.length)} of ${items.length}`, 100 * Math.min(i + 25, items.length) / items.length);
+    setQueue(`${label}: removing members ${Math.min(i + 25, items.length)} of ${items.length}`, 100 * Math.min(i + 25, items.length) / items.length);
   }
-  pushReports(out.map((r) => ({ Type: label, Name: r.email || r.name, Project: r.projectName, Result: r.success ? 'Success' : 'Failed', Detail: r.error || '' })));
+  pushReports(out.map((r) => ({ Type: `${label} (remove member)`, Name: r.email || r.name, Project: r.projectName, Result: r.success ? 'Success' : 'Failed', Detail: r.error || '' })));
   return out;
 }
 async function auditRemove() {
@@ -656,24 +710,42 @@ async function auditRemove() {
   S.access.members = S.access.members.filter((m) => !ok.has(m.key));
   flash(`${ok.size} removed, ${out.length - ok.size} failed.`); paintAudit();
 }
+
+/* Shared delete: remove every project member of the companies, then delete the companies.
+   A company is only deleted when all of its memberships were removed and every project could be read. */
+async function purgeCompanyList(list, label) {
+  const deleted = new Set(), kept = new Map();
+  const needScan = list.filter((c) => (c.members || 0) > 0 || (c.projects || 0) > 0);
+  let memberships = [], scanErrors = [];
+  if (needScan.length) {
+    const r = await scanMemberships(needScan.map((c) => c.id), (a, b) => setQueue(`${label}: scanning projects for members ${a} of ${b}`, 100 * a / b));
+    memberships = r.found; scanErrors = r.errors;
+  }
+  const removeResults = memberships.length ? await removeMemberships(memberships, label) : [];
+  const failedCompanies = new Set(removeResults.filter((r) => !r.success).map((r) => (memberships.find((m) => m.key === r.key) || {}).companyId));
+  const deletable = list.filter((c) => {
+    if (failedCompanies.has(c.id)) { kept.set(c.id, 'Some project members could not be removed'); return false; }
+    if (scanErrors.length && needScan.includes(c)) { kept.set(c.id, `${scanErrors.length} project(s) could not be read, company kept for safety`); return false; }
+    return true;
+  });
+  for (let i = 0; i < deletable.length; i += 25) {
+    const d = await api('companies-purge', { body: { hubId: S.hub, companies: deletable.slice(i, i + 25).map((c) => ({ id: c.id, name: c.name })) } });
+    d.results.forEach((r) => { if (r.success) deleted.add(r.id); else kept.set(r.id, r.error); });
+    pushReports(d.results.map((r) => ({ Type: `${label} (delete company)`, Name: r.name, Result: r.success ? 'Success' : 'Failed', Detail: r.error || '' })));
+    setQueue(`${label}: deleting companies ${Math.min(i + 25, deletable.length)} of ${deletable.length}`, 100 * Math.min(i + 25, deletable.length) / deletable.length);
+  }
+  list.filter((c) => !deletable.includes(c)).forEach((c) => pushReports([{ Type: `${label} (delete company)`, Name: c.name, Result: 'Pending', Detail: kept.get(c.id) }]));
+  S.companies = S.companies.filter((c) => !deleted.has(c.id));
+  deleted.forEach((id) => S.cSel.delete(id));
+  return { deleted, kept };
+}
+
 async function deepPurge() {
   const selected = filteredCompanies().filter((c) => S.cSel.has(c.id));
   if (!selected.length) return showError('Select at least one company first.');
   if (prompt(`This removes every project member assigned to ${companies(selected.length)} and then deletes them.\n\nType PURGE to continue.`) !== 'PURGE') return;
-  const needScan = selected.filter((c) => c.members > 0 || c.projects > 0);
-  let memberships = [], scanErrors = [];
-  if (needScan.length) { const r = await scanMemberships(needScan.map((c) => c.id), (a, b) => setQueue(`Scanning projects for members: ${a} of ${b}`, 100 * a / b)); memberships = r.found; scanErrors = r.errors; }
-  const removeResults = memberships.length ? await removeMemberships(memberships, 'Purge: remove member') : [];
-  const failedCompanies = new Set(removeResults.filter((r) => !r.success).map((r) => (memberships.find((m) => m.key === r.key) || {}).companyId));
-  const deletable = selected.filter((c) => !failedCompanies.has(c.id) && !scanErrors.length);
-  const deleted = new Set();
-  for (let i = 0; i < deletable.length; i += 25) {
-    const d = await api('companies-purge', { body: { hubId: S.hub, companies: deletable.slice(i, i + 25) } });
-    d.results.forEach((r) => { if (r.success) deleted.add(r.id); });
-    pushReports(d.results.map((r) => ({ Type: 'Company purge', Name: r.name, Result: r.success ? 'Success' : 'Failed', Detail: r.error || '' })));
-  }
-  selected.filter((c) => !deleted.has(c.id) && !deletable.includes(c)).forEach((c) => pushReports([{ Type: 'Company purge', Name: c.name, Result: 'Pending', Detail: scanErrors.length ? 'Some projects could not be scanned; company kept.' : 'One or more memberships could not be removed.' }]));
-  S.companies = S.companies.filter((c) => !deleted.has(c.id)); S.cSel.clear();
+  const { deleted } = await purgeCompanyList(selected, 'Company purge');
+  setQueue(null);
   flash(`Purge complete: ${deleted.size} deleted, ${selected.length - deleted.size} kept. See Reports.`); renderView();
 }
 
@@ -789,7 +861,7 @@ async function moveRun() {
     if (S.moveOpts.purge) {
       const clean = M.sources.filter((src) => !M.errors.length && M.rows.filter((r) => r.sourceId === src.id).every((r) => /Moved/.test(r.status2)));
       if (clean.length) {
-        const d = await api('companies-purge', { body: { hubId: S.hub, companies: clean } });
+        const d = await api('companies-purge', { body: { hubId: S.hub, companies: clean.map((c) => ({ id: c.id, name: c.name })) } });
         M.purged = d.results.filter((r) => r.success).map((r) => r.id);
         S.companies = S.companies.filter((c) => !M.purged.includes(c.id));
         pushReports(d.results.map((r) => ({ Type: 'Replace company (delete old)', Name: r.name, Result: r.success ? 'Success' : 'Failed', Detail: r.error || '' })));
@@ -1089,7 +1161,7 @@ async function buildRegister() {
 const SELECT_ALL = {
   cSel: () => filteredCompanies().map((c) => c.id), pSel: () => accessProjects().map((p) => p.id), mSel: () => filteredMembers().map((m) => m.key),
   uProjSel: () => userProjects().map((p) => p.projectId), bulkSel: () => bulkUsers().map((u) => u.id), jobSel: () => filteredJobs().map((p) => p.id),
-  abnSel: () => abnRows().filter((r) => r.changes).map((r) => r.id),
+  abnSel: () => abnRows().filter((r) => !isDeleted(r)).map((r) => r.id),
   moveSel: () => moveRows().filter((r) => !isBim(r.projectPlatform) && !/Moved/.test(r.status2)).map((r) => r.key)
 };
 const repaint = (set) => (set === 'moveSel' ? paintMove() : renderView());
@@ -1112,7 +1184,10 @@ const ACT = {
   addField: (el) => addField(el.dataset.kind, el.dataset.id), saveField: (el) => saveField(el.dataset.kind, el.dataset.id),
   autoRename, deepPurge, bulkErpTax, applyErp,
   abnFromDirectory: () => { S.abn.scope = S.cSel.size ? 'selected' : 'filtered'; S.tab = 'abn'; render(); },
-  abnRun, abnApply, abnExport, abnStop: () => { S.abn.stop = true; flash('Stopping after the current batch...'); },
+  abnRun, abnApply, abnExport, abnDelete,
+  abnStop: () => { S.abn.stop = true; flash('Stopping after the current batch...'); },
+  abnFilter: (el) => { S.abn.match = el.dataset.k; S.abn.limit = PAGE_STEP; renderView(); },
+  abnSelectReady: () => { abnRows().filter(isReady).forEach((r) => S.abn.sel.add(r.id)); renderView(); },
   comboClear: (el, e) => { e.preventDefault(); delete S.pick[el.dataset.key]; const i = document.getElementById('combo_' + el.dataset.key); if (i) { i.value = ''; i.focus(); } const box = el.closest('.combo'); if (box) box.classList.remove('has'); el.outerHTML = '<span class="combo-caret">&#9662;</span>'; if (el.dataset.key === '__bulkUser') { S.bulk.preview = false; renderView(); } },
   replaceOne: (el) => startReplace([companyById(el.dataset.id)], companyById(S.pick[el.dataset.id])),
   replaceSelected: () => { const sources = S.companies.filter((c) => S.cSel.has(c.id)); if (!sources.length) return showError('Tick the companies to replace first.'); return startReplace(sources, companyById(S.pick.__bulk)); },
@@ -1154,13 +1229,13 @@ const IN = {
   moveSearch: (el) => { S.move.search = el.value; debouncedMove(); }
 };
 const CH = {
-  hub: (el) => { S.hub = el.value; S.companies = []; S.companiesLoaded = false; S.projects = []; S.projectsLoaded = false; S.user.users = []; S.user.loaded = false; S.access.members = []; S.pick = {}; S.abn.rows = []; renderView(); },
+  hub: (el) => { S.hub = el.value; S.companies = []; S.companiesLoaded = false; S.projects = []; S.projectsLoaded = false; S.user.users = []; S.user.loaded = false; S.access.members = []; S.pick = {}; S.abn.rows = []; S.abn.sel.clear(); renderView(); },
   row: (el) => {
     const set = SETS()[el.dataset.set];
     if (el.checked) set.add(el.dataset.id); else set.delete(el.dataset.id);
     if (el.dataset.set === 'bulkSel') S.bulk.preview = false;
     if (el.dataset.set === 'moveSel') { paintMove(); return; }
-    if (S.only[el.dataset.set] && !el.checked) { renderView(); return; }
+    if (el.dataset.set === 'abnSel' || (S.only[el.dataset.set] && !el.checked)) { renderView(); return; }
     paintCounts();
   },
   only: (el) => { S.only[el.dataset.set] = el.checked; repaint(el.dataset.set); },
@@ -1172,7 +1247,7 @@ const CH = {
   moveOpt: (el) => { S.moveOpts[el.dataset.k] = el.checked; paintMove(); },
   abnScope: (el) => { S.abn.scope = el.value; renderView(); },
   abnMatch: (el) => { S.abn.match = el.value; S.abn.limit = PAGE_STEP; renderView(); },
-  abnOpt: (el) => { S.abn.opts[el.dataset.k] = el.checked; refreshAbnChanges(); S.abn.rows.forEach((r) => { if (!r.changes) S.abn.sel.delete(r.id); }); renderView(); },
+  abnOpt: (el) => { S.abn.opts[el.dataset.k] = el.checked; refreshAbnChanges(); renderView(); },
   pStatus: (el) => { S.access.pStatus = el.value; renderView(); }, mCompany: (el) => { S.access.mCompany = el.value; renderView(); }, mRole: (el) => { S.access.role = el.value; },
   uCompany: (el) => { S.user.company = el.value; renderView(); },
   bCompany: (el) => { S.bulk.company = el.value; S.bulk.preview = false; renderView(); },
