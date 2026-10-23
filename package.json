@@ -1,6 +1,6 @@
 {
-  "name": "company-manage-v37",
-  "version": "37.0.0",
+  "name": "company-manage-v38",
+  "version": "38.0.0",
   "private": true,
   "engines": { "node": ">=18" },
   "scripts": { "build": "node build.js" },
