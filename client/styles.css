@@ -13,6 +13,7 @@ a{color:var(--blue)}
 .head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:6px;flex-wrap:wrap}
 .head h1{margin:0;font-size:26px}
 .bar{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.bar label.small{display:flex;flex-direction:column;gap:3px}
 .grow{flex:1;min-width:170px}
 .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px;margin:14px 0;box-shadow:0 6px 18px rgba(15,45,74,.05)}
 .card h3{margin:0 0 6px}.card h4{margin:14px 0 8px}

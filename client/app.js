@@ -1,5 +1,5 @@
 'use strict';
-/* Company Manage v36 - admin console for Autodesk Construction Cloud / BIM 360 */
+/* Company Manage v37 - admin console for Autodesk Construction Cloud / BIM 360 */
 
 const API = '/api/index?action=';
 const PAGE_STEP = 300;
@@ -15,6 +15,7 @@ const S = {
   jobs: { search: '', sel: new Set(), op: 'addPrefix', value: '', preview: [], noJob: false, limit: PAGE_STEP },
   abn: { guid: localStorage.getItem('abrGuid') || '', scope: 'filtered', rows: [], sel: new Set(), search: '', match: 'all', limit: PAGE_STEP,
     opts: { address: true, fillTax: true, overwrite: false }, running: false, stop: false, done: 0, total: 0 },
+  xdel: { file: '', wb: null, sheets: [], sheet: '', cols: {}, headers: [], raw: [], rows: [], sel: new Set(), search: '', filter: 'all', limit: PAGE_STEP, running: false },
   imp: { rows: [], file: '' },
   only: {}, pick: {}, moveOpts: { hub: true, purge: false }, move: null, audit: null, reports: []
 };
@@ -30,7 +31,9 @@ const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = se
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 const companies = (n) => `${n} compan${n === 1 ? 'y' : 'ies'}`;
 const isBim = (platform) => /bim/i.test(platform || '');
-const fmtAbn = (a) => { const d = String(a || '').replace(/\D/g, ''); return d.length === 11 ? `${d.slice(0, 2)} ${d.slice(2, 5)} ${d.slice(5, 8)} ${d.slice(8)}` : a || ''; };
+const digitsOnly = (v) => String(v || '').replace(/\D/g, '');
+const fmtAbn = (a) => { const d = digitsOnly(a); return d.length === 11 ? `${d.slice(0, 2)} ${d.slice(2, 5)} ${d.slice(5, 8)} ${d.slice(8)}` : a || ''; };
+const coreName = (s) => norm(s).replace(/&/g, ' and ').replace(/\bp\s*\/\s*l\b/g, ' ').replace(/[^a-z0-9 ]+/g, ' ').replace(/\b(pty|ltd|limited|proprietary|inc|incorporated|the)\b/g, ' ').replace(/\s+/g, ' ').trim();
 
 async function api(action, opts) {
   const o = opts || {};
@@ -102,7 +105,7 @@ function keepFocus(paint) {
   if (id) { const el = document.getElementById(id); if (el && el.tagName === 'INPUT') { el.focus(); try { el.setSelectionRange(pos, pos); } catch { /* ignore */ } } }
 }
 
-const SETS = () => ({ cSel: S.cSel, pSel: S.access.pSel, mSel: S.access.mSel, uProjSel: S.user.pSel, bulkSel: S.bulk.sel, jobSel: S.jobs.sel, abnSel: S.abn.sel, moveSel: S.move ? S.move.sel : new Set() });
+const SETS = () => ({ cSel: S.cSel, pSel: S.access.pSel, mSel: S.access.mSel, uProjSel: S.user.pSel, bulkSel: S.bulk.sel, jobSel: S.jobs.sel, abnSel: S.abn.sel, xdelSel: S.xdel.sel, moveSel: S.move ? S.move.sel : new Set() });
 function paintCounts() { const sets = SETS(); document.querySelectorAll('[data-count]').forEach((el) => { el.textContent = `${sets[el.dataset.count].size} selected`; }); }
 
 /* ------------------------------------------------- company combobox */
@@ -190,7 +193,7 @@ const userProjects = () => onlySel('uProjSel', S.user.projects.filter((p) => has
 const filteredJobs = () => onlySel('jobSel', searchProjects(S.jobs.search, 'all').filter((p) => !S.jobs.noJob || !p.jobNumber), (p) => p.id);
 const moveRows = () => (S.move ? onlySel('moveSel', S.move.rows.filter((r) => hasText([r.projectName, r.name, r.email, r.company], (S.move.search || '').toLowerCase())), (r) => r.key) : []);
 
-/* --- ABN result categories used by the ABN Lookup filter */
+/* --- ABN result categories */
 const MATCH_TYPES = ['ABN match', 'Exact name match', 'Close name match', 'Name match - multiple ABNs', 'No match', 'Lookup error'];
 const isCancelled = (r) => !!(r.abr && !/active/i.test(r.abr.status));
 const isNoMatch = (r) => r.match === 'No match' || r.match === 'Lookup error';
@@ -215,12 +218,12 @@ function abnRows() {
 }
 
 /* ---------------------------------------------------------------- shell */
-const TABS = [['dashboard', 'Dashboard'], ['companies', 'Company Directory'], ['abn', 'ABN Lookup'], ['import', 'Import Companies'], ['access', 'Users & Access'], ['user', 'User Removal'], ['bulk', 'Bulk User Company'], ['numbers', 'Project Numbers'], ['reports', 'Reports & Excel']];
+const TABS = [['dashboard', 'Dashboard'], ['companies', 'Company Directory'], ['abn', 'ABN Lookup'], ['xdel', 'Delete from Excel'], ['import', 'Import Companies'], ['access', 'Users & Access'], ['user', 'User Removal'], ['bulk', 'Bulk User Company'], ['numbers', 'Project Numbers'], ['reports', 'Reports & Excel']];
 
 function render() {
   comboClose();
   $('#app').innerHTML = `<div class="layout">
-    <aside class="side"><div class="brand">Company Manage<small>v36 &middot; Hub administration</small></div>
+    <aside class="side"><div class="brand">Company Manage<small>v37 &middot; Hub administration</small></div>
       <nav>${TABS.map(([id, label]) => `<button data-act="nav" data-tab="${id}" class="${S.tab === id ? 'on' : ''}">${label}</button>`).join('')}</nav></aside>
     <main class="main">
       <header class="head"><h1>${esc(TABS.find((t) => t[0] === S.tab)[1])}</h1>
@@ -259,9 +262,9 @@ VIEWS.dashboard = () => {
     ${quick('unused', 'Unused (no members, no projects)', unused.toLocaleString())}${quick('noImage', 'Companies without a logo', noImg.toLocaleString())}</div></div>
   <div class="card"><h3>What each tab does</h3><ul class="steps">
     <li><b>Company Directory</b> - filters, ERP/Tax IDs, logos, Members/Projects audit, Replace with (verified), Auto Rename, Bulk ERP/Tax, Remove Members + Purge.</li>
-    <li><b>ABN Lookup</b> - checks every company against the Australian Business Register, fills missing ABN, state and postcode, filters cancelled or unmatched companies and can remove them, and produces a report.</li>
-    <li><b>Import Companies</b> - validate and import Excel files with every company field.</li>
-    <li><b>Users &amp; Access</b>, <b>User Removal</b>, <b>Bulk User Company</b>, <b>Project Numbers</b>, <b>Reports &amp; Excel</b>.</li></ul></div>`;
+    <li><b>ABN Lookup</b> - checks companies against the Australian Business Register, fills ABN/state/postcode, filters and deletes cancelled or unmatched companies.</li>
+    <li><b>Delete from Excel</b> - upload a list (for example the ABN Lookup report), match each row to a Forma company by Company ID, then Tax ID, then name, review and delete.</li>
+    <li><b>Import Companies</b>, <b>Users &amp; Access</b>, <b>User Removal</b>, <b>Bulk User Company</b>, <b>Project Numbers</b>, <b>Reports &amp; Excel</b>.</li></ul></div>`;
 };
 
 /* ------------------------------------------------------ company directory */
@@ -324,6 +327,7 @@ async function loadCompanies() {
     for (const job of pending) { await sleep(5000); try { const d = await api(`companies-page&hubId=${encodeURIComponent(S.hub)}&status=all&limit=${job.lim}&offset=${job.offset}`); all.push(...d.items); } catch { /* ignore */ } }
     S.companies = [...new Map(all.map((c) => [c.id, c])).values()];
     S.companiesLoaded = true; S.cSel.clear();
+    if (S.xdel.raw.length) xdelMatch();
     flash(`Loaded ${S.companies.length.toLocaleString()} companies.`);
     renderView();
   } finally { S.busyLock = false; }
@@ -449,6 +453,184 @@ async function applyErp() {
   closeModal(); flash(`ERP/Tax update complete: ${ok.size} updated, ${all.length - ok.size} failed.`); renderView();
 }
 
+/* ======================================================== DELETE FROM EXCEL */
+/* Column aliases. The ABN Lookup report columns are included, so its sheets work as-is. */
+const XCOLS = {
+  id: ['company id', 'companyid', 'forma company id', 'id', 'company_id'],
+  name: ['company name', 'forma company', 'company', 'name', 'supplier name', 'supplier'],
+  tax: ['forma tax id (original)', 'forma tax id', 'forma tax id (now)', 'tax id', 'tax_id', 'taxid', 'abn'],
+  erp: ['erp id', 'erp', 'erp_id', 'supplier id', 'workday id'],
+  reason: ['reason', 'match type', 'note', 'comment', 'comments']
+};
+const XDEL_TEMPLATE = [
+  { 'Company ID': '0f1e2d3c-0000-0000-0000-000000000000', 'Company Name': 'Example Supplier Pty Ltd', 'Tax ID': '12 345 678 901', 'ERP ID': '', Reason: 'No match on ABR' },
+  { 'Company ID': '', 'Company Name': 'Another Supplier', 'Tax ID': '', 'ERP ID': 'SUP-1001', Reason: 'Cancelled ABN' }
+];
+function detectColumns(headers) {
+  const lower = headers.map((h) => norm(h));
+  const out = {};
+  for (const [key, aliases] of Object.entries(XCOLS)) {
+    const i = aliases.map((a) => lower.indexOf(a)).find((x) => x >= 0);
+    out[key] = i != null && i >= 0 ? headers[i] : '';
+  }
+  return out;
+}
+function pickSheet(wb) {
+  const scored = wb.SheetNames.map((n) => {
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[n], { defval: '' });
+    const cols = detectColumns(Object.keys(rows[0] || {}));
+    return { n, rows: rows.length, score: (cols.id ? 4 : 0) + (cols.name ? 2 : 0) + (cols.tax ? 1 : 0) };
+  }).filter((s) => s.rows);
+  scored.sort((a, b) => b.score - a.score || b.rows - a.rows);
+  const preferred = scored.find((s) => /no match|cancel|delete/i.test(s.n) && s.score >= 4);
+  return (preferred || scored[0] || { n: wb.SheetNames[0] }).n;
+}
+async function xdelFile(file) {
+  if (!file) return;
+  if (typeof XLSX === 'undefined') return showError('The Excel reader is not available. Check your internet connection and reload.');
+  const X = S.xdel;
+  X.wb = XLSX.read(await file.arrayBuffer());
+  X.file = file.name;
+  X.sheets = X.wb.SheetNames.map((n) => ({ n, count: XLSX.utils.sheet_to_json(X.wb.Sheets[n], { defval: '' }).length }));
+  xdelLoadSheet(pickSheet(X.wb));
+}
+function xdelLoadSheet(name) {
+  const X = S.xdel;
+  X.sheet = name;
+  X.raw = XLSX.utils.sheet_to_json(X.wb.Sheets[name], { defval: '' });
+  X.headers = Object.keys(X.raw[0] || {});
+  X.cols = detectColumns(X.headers);
+  xdelMatch();
+  renderView();
+}
+
+/* Matching order: Company ID (exact) -> Tax ID / ABN (digits, unique) -> ERP ID (unique) -> name (normalised, unique). */
+function xdelMatch() {
+  const X = S.xdel, c = X.cols;
+  const byId = new Map(S.companies.map((x) => [String(x.id).toLowerCase(), x]));
+  const multi = (keyFn) => { const m = new Map(); for (const x of S.companies) { const k = keyFn(x); if (k) { if (!m.has(k)) m.set(k, []); m.get(k).push(x); } } return m; };
+  const byTax = multi((x) => { const d = digitsOnly(x.taxId); return d.length >= 9 ? d : ''; });
+  const byErp = multi((x) => norm(x.erpId));
+  const byName = multi((x) => norm(x.name));
+  const byCore = multi((x) => coreName(x.name));
+  const seen = new Map();
+  X.rows = X.raw.map((r, i) => {
+    const fid = String(c.id ? r[c.id] : '').trim(), fname = String(c.name ? r[c.name] : '').trim();
+    const ftax = String(c.tax ? r[c.tax] : '').trim(), ferp = String(c.erp ? r[c.erp] : '').trim(), reason = String(c.reason ? r[c.reason] : '').trim();
+    const row = { key: `r${i}`, row: i + 2, fid, fname, ftax, ferp, reason, company: null, by: '', status: '', detail: '' };
+    const pickList = (list, by) => {
+      const live = (list || []).filter((x) => x.status !== 'deleted');
+      if (live.length === 1) { row.company = live[0]; row.by = by; return true; }
+      if (live.length > 1) { row.status = 'Ambiguous'; row.detail = `${live.length} companies share this ${by}`; return true; }
+      if ((list || []).length) { row.company = list[0]; row.by = by; return true; }
+      return false;
+    };
+    if (!fid && !fname && !ftax && !ferp) { row.status = 'Empty row'; return row; }
+    if (fid && byId.has(fid.toLowerCase())) { row.company = byId.get(fid.toLowerCase()); row.by = 'Company ID'; }
+    else if (fid && !S.companiesLoaded) { row.status = 'Load companies'; }
+    else {
+      if (fid) row.detail = 'Company ID not found in the Hub; ';
+      const d = digitsOnly(ftax);
+      (d.length >= 9 && pickList(byTax.get(d), 'Tax ID')) ||
+      (ferp && pickList(byErp.get(norm(ferp)), 'ERP ID')) ||
+      (fname && pickList(byName.get(norm(fname)), 'name')) ||
+      (fname && coreName(fname) && pickList(byCore.get(coreName(fname)), 'name (ignoring Pty Ltd)'));
+    }
+    if (!row.status) {
+      if (!row.company) { row.status = S.companiesLoaded ? 'Not found' : 'Load companies'; row.detail += S.companiesLoaded ? 'No Forma company matches this row' : ''; }
+      else if (row.company.status === 'deleted') row.status = 'Already deleted';
+      else if (seen.has(row.company.id)) { row.status = 'Duplicate row'; row.detail = `Same company as row ${seen.get(row.company.id)}`; }
+      else {
+        seen.set(row.company.id, row.row);
+        row.status = 'Ready';
+        if (row.by !== 'Company ID' && fname && coreName(fname) !== coreName(row.company.name)) row.detail += `Matched by ${row.by}, but the Forma name is different - check`;
+        if (row.by.startsWith('name')) row.detail += row.detail ? '' : 'Matched by name only - check';
+      }
+    }
+    return row;
+  });
+  X.sel = new Set();
+}
+const XDEL_FILTERS = [
+  ['all', 'All rows', () => true],
+  ['Ready', 'Ready to delete', (r) => r.status === 'Ready'],
+  ['check', 'Ready, but check the match', (r) => r.status === 'Ready' && /check/.test(r.detail)],
+  ['byid', 'Matched by Company ID', (r) => r.status === 'Ready' && r.by === 'Company ID'],
+  ['Not found', 'Not found', (r) => r.status === 'Not found'],
+  ['Ambiguous', 'Ambiguous (several companies match)', (r) => r.status === 'Ambiguous'],
+  ['Duplicate row', 'Duplicate rows', (r) => r.status === 'Duplicate row'],
+  ['Already deleted', 'Already deleted', (r) => r.status === 'Already deleted'],
+  ['Deleted', 'Deleted in this session', (r) => r.status === 'Deleted'],
+  ['Not deleted', 'Delete failed / kept', (r) => r.status === 'Not deleted']
+];
+function xdelRows() {
+  const X = S.xdel, q = X.search.trim().toLowerCase();
+  const f = (XDEL_FILTERS.find((x) => x[0] === X.filter) || XDEL_FILTERS[0])[2];
+  return onlySel('xdelSel', X.rows.filter((r) => f(r) && hasText([r.fid, r.fname, r.ftax, r.ferp, r.reason, r.company && r.company.name, r.status, r.detail], q)), (r) => r.key);
+}
+const xdelSelectable = (r) => r.status === 'Ready';
+
+VIEWS.xdel = () => {
+  const X = S.xdel, rows = xdelRows(), shown = rows.slice(0, X.limit);
+  const count = (k) => X.rows.filter((XDEL_FILTERS.find((x) => x[0] === k) || XDEL_FILTERS[0])[2]).length;
+  const sel = X.rows.filter((r) => X.sel.has(r.key) && xdelSelectable(r));
+  const members = sel.reduce((n, r) => n + (r.company.members || 0), 0);
+  const stCls = (s) => (s === 'Ready' ? 'good' : s === 'Deleted' ? '' : s === 'Ambiguous' || s === 'Duplicate row' || s === 'Load companies' ? 'warn' : 'bad');
+  const colSel = (key, label) => `<label class="small"><b>${label}</b><select class="select" data-ch="xdelCol" data-k="${key}"><option value="">(none)</option>${X.headers.map((h) => `<option ${X.cols[key] === h ? 'selected' : ''}>${esc(h)}</option>`).join('')}</select></label>`;
+  return `<div class="card"><h3>Delete companies listed in an Excel file</h3>
+    <p class="muted">Upload any Excel or CSV list of companies, including the <b>ABN Lookup report</b> (use its <b>No Match</b> or <b>Cancelled ABN</b> sheet as-is). Each row is matched to a Forma company by <b>Company ID</b> first, then <b>Tax ID / ABN</b>, then <b>ERP ID</b>, then <b>name</b>. Only rows marked <b>Ready</b> can be deleted.</p>
+    <div class="bar"><button class="btn light" data-act="xdelTemplate">Download template</button>
+      <input type="file" accept=".xlsx,.xls,.csv" data-ch="xdelFile">
+      ${S.companiesLoaded ? `<span class="badge good">${S.companies.length.toLocaleString()} companies loaded</span>` : '<button class="btn" data-act="loadCompanies">Load companies (required for matching)</button>'}</div>
+    ${X.file ? `<div class="bar"><span class="badge">${esc(X.file)}</span>
+      <label class="small"><b>Sheet</b><select class="select" data-ch="xdelSheet">${X.sheets.map((s) => `<option value="${esc(s.n)}" ${s.n === X.sheet ? 'selected' : ''}>${esc(s.n)} (${s.count} rows)</option>`).join('')}</select></label>
+      ${colSel('id', 'Company ID')}${colSel('name', 'Name')}${colSel('tax', 'Tax ID / ABN')}${colSel('erp', 'ERP ID')}${colSel('reason', 'Reason')}</div>
+      ${!X.cols.id ? '<div class="notice">No Company ID column found. Matching will use Tax ID, ERP ID and name, which is less exact. The ABN Lookup report includes a Company ID column.</div>' : ''}` : ''}</div>
+  ${X.rows.length ? `<div class="card">
+    <div class="bar chips"><b>Rows</b>${XDEL_FILTERS.filter(([k]) => k === 'all' || count(k)).map(([k, label]) => `<button class="badge ${stCls(k === 'check' || k === 'byid' ? 'Ready' : k)} clickable ${X.filter === k ? 'sel' : ''}" data-act="xdelFilter" data-k="${esc(k)}">${esc(label)}: ${count(k)}</button>`).join('')}</div>
+    <div class="bar"><input id="xdelSearch" class="input grow" data-in="xdelSearch" placeholder="Search file name, ID, ABN, Forma name or reason" value="${esc(X.search)}"><span class="badge">${rows.length.toLocaleString()} shown</span></div>
+    <div class="bar">${selBar('xdelSel')}<button class="btn light" data-act="xdelExport">Export Match Report</button></div>
+    <div class="dangerbox"><div class="bar"><b>Delete from Hub</b><span class="muted small">Removes every project member of each selected company, then deletes the company. A company is kept if any member cannot be removed or any project cannot be read.</span></div>
+      <div class="bar"><button class="btn danger" data-act="xdelDelete" ${X.running || !sel.length ? 'disabled' : ''}>Delete ${companies(sel.length)}</button>
+        ${sel.length ? `<span class="muted small">${sel.filter((r) => r.by === 'Company ID').length} matched by Company ID &middot; ${sel.filter((r) => /check/.test(r.detail)).length} need checking &middot; ${members} project members will be removed</span>` : '<span class="muted small">Only Ready rows can be selected.</span>'}</div></div>
+    ${tbl(['Select', 'Row', 'File: Company ID', 'File: name', 'File: Tax ID', 'Reason', 'Forma company', 'Members / projects', 'Matched by', 'Status', 'Detail'],
+      shown.map((r) => [xdelSelectable(r) ? rowBox('xdelSel', r.key, X.sel.has(r.key)) : '<span class="muted">-</span>', r.row,
+        `<span class="small">${esc(r.fid)}</span>`, esc(r.fname), esc(r.ftax), esc(r.reason),
+        r.company ? esc(r.company.name) : '<span class="muted">-</span>',
+        r.company ? `${r.company.members || 0} / ${r.company.projects || 0}` : '',
+        esc(r.by), `<span class="badge ${stCls(r.status)}">${esc(r.status)}</span>`, `<span class="small">${esc(r.detail)}</span>`]), 'No rows match.')}
+    ${moreBtn('xdelLimit', shown.length, rows.length)}</div>` : ''}`;
+};
+async function xdelDelete() {
+  const X = S.xdel;
+  const rows = X.rows.filter((r) => X.sel.has(r.key) && xdelSelectable(r));
+  const list = rows.map((r) => r.company);
+  if (!list.length) return showError('Select Ready rows to delete first.');
+  const members = list.reduce((n, c) => n + (c.members || 0), 0);
+  const msg = `Delete ${companies(list.length)} from the Hub?\n\n` +
+    `- ${rows.filter((r) => r.by === 'Company ID').length} matched by Company ID\n- ${rows.filter((r) => r.by !== 'Company ID').length} matched by Tax ID, ERP ID or name\n- ${rows.filter((r) => /check/.test(r.detail)).length} flagged "check"\n\n` +
+    `${members} project member(s) will be removed from their projects first.\nExport the match report before continuing.\n\nType DELETE to continue.`;
+  if (prompt(msg) !== 'DELETE') return;
+  X.running = true; renderView();
+  try {
+    const { deleted, kept } = await purgeCompanyList(list, 'Delete from Excel');
+    rows.forEach((r) => {
+      if (deleted.has(r.company.id)) { r.status = 'Deleted'; r.detail = 'Deleted from Hub'; X.sel.delete(r.key); }
+      else { r.status = 'Not deleted'; r.detail = kept.get(r.company.id) || 'See Reports'; }
+    });
+    flash(`Delete complete: ${deleted.size} deleted, ${list.length - deleted.size} kept. Export the match report for the full result.`);
+  } catch (e) { showError(e.message); }
+  finally { X.running = false; setQueue(null); renderView(); }
+}
+function xdelExport() {
+  const X = S.xdel;
+  exportRows(`Delete_from_Excel_${new Date().toISOString().slice(0, 10)}.xlsx`, X.rows.map((r) => ({
+    Row: r.row, 'File Company ID': r.fid, 'File name': r.fname, 'File Tax ID': r.ftax, 'File ERP ID': r.ferp, Reason: r.reason,
+    'Forma company': r.company ? r.company.name : '', 'Forma Company ID': r.company ? r.company.id : '', 'Forma Tax ID': r.company ? r.company.taxId : '',
+    Members: r.company ? r.company.members : '', Projects: r.company ? r.company.projects : '', 'Matched by': r.by, Status: r.status, Detail: r.detail
+  })), 'Match report');
+}
+
 /* ======================================================== ABN LOOKUP */
 function abnScope() {
   const A = S.abn;
@@ -460,7 +642,7 @@ function abnChanges(r) {
   const A = S.abn, c = companyById(r.id), d = r.abr;
   const out = {};
   if (!c || !d || !/active/i.test(d.status) || isDeleted(r)) return out;
-  const digits = String(c.taxId || '').replace(/\D/g, '');
+  const digits = digitsOnly(c.taxId);
   if (A.opts.fillTax && (!c.taxId || (A.opts.overwrite && digits !== d.abn))) out.tax_id = fmtAbn(d.abn);
   if (A.opts.address) {
     if (d.state && (!c.state || (A.opts.overwrite && norm(c.state) !== norm(d.state)))) out.state_or_province = d.state;
@@ -482,7 +664,7 @@ VIEWS.abn = () => {
   const matchCls = (m) => (m === 'ABN match' || m === 'Exact name match' ? 'good' : m === 'Close name match' || m.startsWith('Name match') ? 'warn' : 'bad');
   const quickF = (k, label, n, cls) => `<button class="badge ${cls} clickable ${A.match === k ? 'sel' : ''}" data-act="abnFilter" data-k="${k}">${label}: ${n}</button>`;
   return `<div class="card"><h3>Check companies against the Australian Business Register</h3>
-    <p class="muted">The app uses the Forma <b>Tax ID</b> if it is a valid ABN, otherwise it searches ABN Lookup by <b>company name</b>. Matches can fill the missing ABN, <b>state</b> and <b>postcode</b> (ABR does not publish street addresses). Cancelled and unmatched companies can be filtered and removed.</p>
+    <p class="muted">The app uses the Forma <b>Tax ID</b> if it is a valid ABN, otherwise it searches ABN Lookup by <b>company name</b>. Matches can fill the missing ABN, <b>state</b> and <b>postcode</b> (ABR does not publish street addresses). Export the report and use <b>Delete from Excel</b> to remove companies from a reviewed list.</p>
     <div class="bar"><b>ABN Lookup GUID</b>
       <input id="abrGuid" class="input grow" data-in="abrGuid" type="password" placeholder="${S.abrConfigured ? 'Using ABR_GUID from Vercel (optional override)' : 'Paste the GUID emailed to you by ABR'}" value="${esc(A.guid)}">
       <a class="btn light" href="https://abr.business.gov.au/Tools/WebServices" target="_blank" rel="noopener">Get a free GUID</a></div>
@@ -510,7 +692,7 @@ VIEWS.abn = () => {
         <button class="btn" data-act="abnApply" ${A.running ? 'disabled' : ''}>Apply ${selRows.filter((r) => r.changes).length} selected updates to Forma</button>
         <button class="btn light" data-act="abnExport">Export Report</button></div></div>
     <div class="dangerbox">
-      <div class="bar"><b>Delete companies</b><span class="muted small">Removes every project member of the selected companies, then deletes the companies. Use the filter above (for example <b>Cancelled + not matched</b>), then Select All Filtered.</span></div>
+      <div class="bar"><b>Delete companies</b><span class="muted small">Removes every project member of the selected companies, then deletes the companies.</span></div>
       <div class="bar"><button class="btn danger" data-act="abnDelete" ${A.running || !selRows.length ? 'disabled' : ''}>Delete ${companies(selRows.length)} selected</button>
         ${selRows.length ? `<span class="muted small">${selRows.filter(isCancelled).length} cancelled, ${selRows.filter(isNoMatch).length} not matched, ${selRows.filter((r) => !isCancelled(r) && !isNoMatch(r)).length} other &middot; ${selRows.reduce((n, r) => n + ((companyById(r.id) || {}).members || 0), 0)} project members will be removed</span>` : ''}</div></div>
     ${tbl(['Select', 'Forma company', 'Members / projects', 'Forma Tax ID', 'Match', 'ABN', 'ABR registered name', 'ABN status', 'ABR state / postcode', 'Changes to apply', 'Note / result'],
@@ -554,7 +736,6 @@ async function abnRun() {
     showError(e.message);
   } finally { A.running = false; renderView(); }
 }
-
 async function abnApply() {
   const A = S.abn;
   refreshAbnChanges();
@@ -583,9 +764,8 @@ async function abnApply() {
   refreshAbnChanges();
   pushReports(all.map((x) => ({ Type: 'ABN Lookup update', Name: x.name, Result: x.success ? 'Success' : 'Failed', Detail: x.success ? Object.entries(x.sent).map(([k, v]) => `${k}=${v}`).join('; ') : x.error })));
   const ok = all.filter((x) => x.success).length;
-  setQueue(null); flash(`Forma updated: ${ok} companies, ${all.length - ok} failed. Export the report for the full detail.`); renderView();
+  setQueue(null); flash(`Forma updated: ${ok} companies, ${all.length - ok} failed.`); renderView();
 }
-
 async function abnDelete() {
   const A = S.abn;
   const rows = A.rows.filter((r) => A.sel.has(r.id) && !isDeleted(r));
@@ -593,10 +773,7 @@ async function abnDelete() {
   if (!list.length) return showError('Select the companies to delete first.');
   const good = rows.filter((r) => !isCancelled(r) && !isNoMatch(r)).length;
   const members = list.reduce((n, c) => n + (c.members || 0), 0);
-  const msg = `Delete ${companies(list.length)} from Forma?\n\n` +
-    `- ${rows.filter(isCancelled).length} with cancelled ABN\n- ${rows.filter(isNoMatch).length} not matched on ABR\n- ${good} other (matched or needs review)\n\n` +
-    `${members} project member(s) assigned to these companies will be removed from their projects first.\n` +
-    'Not-matched companies may still be genuine (for example overseas suppliers or individuals). Export the report before deleting.\n\nType DELETE to continue.';
+  const msg = `Delete ${companies(list.length)} from Forma?\n\n- ${rows.filter(isCancelled).length} with cancelled ABN\n- ${rows.filter(isNoMatch).length} not matched on ABR\n- ${good} other\n\n${members} project member(s) will be removed first.\n\nType DELETE to continue.`;
   if (prompt(msg) !== 'DELETE') return;
   A.running = true; renderView();
   try {
@@ -605,11 +782,10 @@ async function abnDelete() {
       if (deleted.has(r.id)) { r.result = 'Deleted'; r.error = ''; r.changes = null; A.sel.delete(r.id); }
       else { r.result = 'Not deleted'; r.error = kept.get(r.id) || 'See Reports'; }
     });
-    flash(`Delete complete: ${deleted.size} deleted, ${list.length - deleted.size} kept. Full detail is in the report and on the Reports tab.`);
+    flash(`Delete complete: ${deleted.size} deleted, ${list.length - deleted.size} kept.`);
   } catch (e) { showError(e.message); }
   finally { A.running = false; setQueue(null); renderView(); }
 }
-
 function abnExport() {
   const A = S.abn;
   if (typeof XLSX === 'undefined') return exportRows('ABN_Lookup_Report.xlsx', A.rows.map(abnReportRow), 'Report');
@@ -618,7 +794,6 @@ function abnExport() {
   summary.push({ Category: 'Cancelled / inactive ABN', Companies: A.rows.filter(isCancelled).length });
   summary.push({ Category: 'Updated in Forma', Companies: A.rows.filter((r) => r.result === 'Updated').length });
   summary.push({ Category: 'Deleted from Forma', Companies: A.rows.filter(isDeleted).length });
-  summary.push({ Category: 'Update or delete failed', Companies: A.rows.filter((r) => r.result === 'Failed' || r.result === 'Not deleted').length });
   addSheet(wb, 'Summary', summary);
   addSheet(wb, 'All Companies', A.rows.map(abnReportRow));
   addSheet(wb, 'Updated', A.rows.filter((r) => r.result === 'Updated').map(abnReportRow));
@@ -631,14 +806,14 @@ function abnExport() {
 function abnReportRow(r) {
   const d = r.abr || {}, c = companyById(r.id) || {};
   return {
-    'Forma company': r.name, 'Forma Tax ID (original)': r.taxId || '', 'Forma state (original)': r.formaState || '', 'Forma postcode (original)': r.formaPostcode || '',
+    'Company ID': r.id, 'Forma company': r.name, 'Forma Tax ID (original)': r.taxId || '', 'Forma state (original)': r.formaState || '', 'Forma postcode (original)': r.formaPostcode || '',
     'Match type': r.match, 'Name similarity %': r.confidence || '', ABN: d.abn ? fmtAbn(d.abn) : '', 'ABR entity name': d.entityName || '',
     'ABR business names': (d.businessNames || []).join('; '), 'Entity type': d.entityType || '', 'ABN status': d.status || '', 'GST registered from': d.gst || '',
     'ABR state': d.state || '', 'ABR postcode': d.postcode || '',
     'Changes proposed': r.changes ? Object.entries(r.changes).map(([k, v]) => `${k}=${v}`).join('; ') : '',
     'Changes applied': r.applied ? Object.entries(r.applied).map(([k, v]) => `${k}=${v}`).join('; ') : '',
-    'Result': r.result || 'No action', 'Error': r.error || '', Note: r.note || '',
-    'Forma Tax ID (now)': c.taxId || '', 'Forma state (now)': c.state || '', 'Forma postcode (now)': c.postcode || '', 'Company ID': r.id
+    Result: r.result || 'No action', Error: r.error || '', Note: r.note || '',
+    'Forma Tax ID (now)': c.taxId || '', 'Forma state (now)': c.state || '', 'Forma postcode (now)': c.postcode || '', Members: c.members || 0, Projects: c.projects || 0
   };
 }
 
@@ -735,6 +910,7 @@ async function purgeCompanyList(list, label) {
     setQueue(`${label}: deleting companies ${Math.min(i + 25, deletable.length)} of ${deletable.length}`, 100 * Math.min(i + 25, deletable.length) / deletable.length);
   }
   list.filter((c) => !deletable.includes(c)).forEach((c) => pushReports([{ Type: `${label} (delete company)`, Name: c.name, Result: 'Pending', Detail: kept.get(c.id) }]));
+  S.companies.forEach((c) => { if (deleted.has(c.id)) { c.status = 'deleted'; c.members = 0; c.projects = 0; } });
   S.companies = S.companies.filter((c) => !deleted.has(c.id));
   deleted.forEach((id) => S.cSel.delete(id));
   return { deleted, kept };
@@ -1118,7 +1294,7 @@ VIEWS.reports = () => {
   const r = S.reports, ok = r.filter((x) => x.Result === 'Success').length, bad = r.filter((x) => x.Result === 'Failed').length;
   return `<div class="card"><h3>Comprehensive Hub User Project Register</h3>
     <p class="muted">One Excel workbook listing every Hub user, every project they belong to, their company on each project and their role names.</p>
-    <div class="bar"><button class="btn" data-act="buildRegister">Build Register Workbook</button>${S.abn.rows.length ? '<button class="btn light" data-act="abnExport">ABN Lookup Report</button>' : ''}</div></div>
+    <div class="bar"><button class="btn" data-act="buildRegister">Build Register Workbook</button>${S.abn.rows.length ? '<button class="btn light" data-act="abnExport">ABN Lookup Report</button>' : ''}${S.xdel.rows.length ? '<button class="btn light" data-act="xdelExport">Delete from Excel Report</button>' : ''}</div></div>
   <div class="card"><div class="bar"><h3 class="grow">Action log</h3><span class="badge good">${ok} success</span><span class="badge bad">${bad} failed</span>
       <button class="btn light" data-act="exportReports" ${r.length ? '' : 'disabled'}>Export Excel</button><button class="btn light" data-act="clearReports" ${r.length ? '' : 'disabled'}>Clear</button></div>
     ${tbl(['Time', 'Type', 'Name', 'Project', 'Result', 'Detail'], r.slice(-1000).reverse().map((x) => [esc(x.Time), esc(x.Type), esc(x.Name), esc(x.Project), `<span class="${x.Result === 'Success' ? 'ok' : 'bad'}">${esc(x.Result)}</span>`, esc(x.Detail)]), 'Actions you run appear here.')}</div>`;
@@ -1150,7 +1326,7 @@ async function buildRegister() {
   addSheet(wb, 'Users by Company', [...byCompany].map(([k, v]) => ({ Company: k, 'Distinct users': v.users.size, Projects: v.projects.size, Memberships: v.count })).sort((a, b) => b.Memberships - a.Memberships));
   addSheet(wb, 'Roles Summary', [...byRole].map(([k, v]) => ({ Role: k, 'Distinct users': v.users.size, Memberships: v.count })).sort((a, b) => b.Memberships - a.Memberships));
   addSheet(wb, 'Projects', S.projects.map((p) => ({ Project: p.name, 'Job number': p.jobNumber, Status: p.status, Platform: p.platform, Members: perProject.get(p.id) || 0, 'Project ID': p.id })));
-  if (S.companiesLoaded) addSheet(wb, 'Companies', S.companies.map((c) => ({ Company: c.name, Trade: c.trade, 'ERP ID': c.erpId, 'Tax ID': c.taxId, State: c.state, Postcode: c.postcode, Status: c.status, Members: c.members, Projects: c.projects, 'Company ID': c.id })));
+  if (S.companiesLoaded) addSheet(wb, 'Companies', S.companies.map((c) => ({ 'Company ID': c.id, Company: c.name, Trade: c.trade, 'ERP ID': c.erpId, 'Tax ID': c.taxId, State: c.state, Postcode: c.postcode, Status: c.status, Members: c.members, Projects: c.projects })));
   addSheet(wb, 'Users Without Projects', S.user.users.filter((u) => !withProjects.has(norm(u.email))).map((u) => ({ Name: u.name, Email: u.email, Company: u.company, Status: u.status })));
   addSheet(wb, 'Exceptions', errors.map((e) => ({ Project: e.projectName, Problem: e.error })));
   XLSX.writeFile(wb, `Hub_User_Project_Register_${new Date().toISOString().slice(0, 10)}.xlsx`);
@@ -1162,6 +1338,7 @@ const SELECT_ALL = {
   cSel: () => filteredCompanies().map((c) => c.id), pSel: () => accessProjects().map((p) => p.id), mSel: () => filteredMembers().map((m) => m.key),
   uProjSel: () => userProjects().map((p) => p.projectId), bulkSel: () => bulkUsers().map((u) => u.id), jobSel: () => filteredJobs().map((p) => p.id),
   abnSel: () => abnRows().filter((r) => !isDeleted(r)).map((r) => r.id),
+  xdelSel: () => xdelRows().filter(xdelSelectable).map((r) => r.key),
   moveSel: () => moveRows().filter((r) => !isBim(r.projectPlatform) && !/Moved/.test(r.status2)).map((r) => r.key)
 };
 const repaint = (set) => (set === 'moveSel' ? paintMove() : renderView());
@@ -1173,14 +1350,14 @@ const ACT = {
   auth: async () => { if (S.connected) { await api('auth-logout', { body: {} }); location.reload(); } else { location.href = (await api('auth-login')).url; } },
   refreshHubs: async () => { await loadHubs(); render(); },
   closeModal,
-  more: (el) => { const map = { cLimit: [S, 'cLimit'], mLimit: [S.access, 'mLimit'], uLimit: [S.user, 'limit'], bLimit: [S.bulk, 'limit'], jLimit: [S.jobs, 'limit'], abnLimit: [S.abn, 'limit'] }[el.dataset.k]; map[0][map[1]] += PAGE_STEP; renderView(); },
+  more: (el) => { const map = { cLimit: [S, 'cLimit'], mLimit: [S.access, 'mLimit'], uLimit: [S.user, 'limit'], bLimit: [S.bulk, 'limit'], jLimit: [S.jobs, 'limit'], abnLimit: [S.abn, 'limit'], xdelLimit: [S.xdel, 'limit'] }[el.dataset.k]; map[0][map[1]] += PAGE_STEP; renderView(); },
   selectAll: (el) => { const set = el.dataset.set; SELECT_ALL[set]().forEach((id) => SETS()[set].add(id)); S.bulk.preview = false; repaint(set); },
   clearSel: (el) => { const set = el.dataset.set; SETS()[set].clear(); S.only[set] = false; S.bulk.preview = false; repaint(set); },
   quick: (el) => { resetFilters(); S.cf[el.dataset.q] = true; S.cLimit = PAGE_STEP; S.tab = 'companies'; render(); },
   resetCompanyFilters: () => { resetFilters(); S.only.cSel = false; renderView(); },
   loadCompanies, loadHubUsers,
   loadProjectsBtn: async () => { await loadProjects(true); flash(`Loaded ${S.projects.length.toLocaleString()} projects.`); renderView(); },
-  exportCompanies: () => exportRows('Companies_Filtered.xlsx', filteredCompanies().map((c) => ({ Company: c.name, Trade: c.trade, 'ERP ID': c.erpId, 'Tax ID': c.taxId, State: c.state, Postcode: c.postcode, Status: c.status, Members: c.members, Projects: c.projects, 'Company ID': c.id })), 'Companies'),
+  exportCompanies: () => exportRows('Companies_Filtered.xlsx', filteredCompanies().map((c) => ({ 'Company ID': c.id, Company: c.name, Trade: c.trade, 'ERP ID': c.erpId, 'Tax ID': c.taxId, State: c.state, Postcode: c.postcode, Status: c.status, Members: c.members, Projects: c.projects })), 'Companies'),
   addField: (el) => addField(el.dataset.kind, el.dataset.id), saveField: (el) => saveField(el.dataset.kind, el.dataset.id),
   autoRename, deepPurge, bulkErpTax, applyErp,
   abnFromDirectory: () => { S.abn.scope = S.cSel.size ? 'selected' : 'filtered'; S.tab = 'abn'; render(); },
@@ -1188,6 +1365,9 @@ const ACT = {
   abnStop: () => { S.abn.stop = true; flash('Stopping after the current batch...'); },
   abnFilter: (el) => { S.abn.match = el.dataset.k; S.abn.limit = PAGE_STEP; renderView(); },
   abnSelectReady: () => { abnRows().filter(isReady).forEach((r) => S.abn.sel.add(r.id)); renderView(); },
+  xdelTemplate: () => exportRows('Delete_Companies_Template.xlsx', XDEL_TEMPLATE, 'Companies to delete'),
+  xdelFilter: (el) => { S.xdel.filter = el.dataset.k; S.xdel.limit = PAGE_STEP; renderView(); },
+  xdelDelete, xdelExport,
   comboClear: (el, e) => { e.preventDefault(); delete S.pick[el.dataset.key]; const i = document.getElementById('combo_' + el.dataset.key); if (i) { i.value = ''; i.focus(); } const box = el.closest('.combo'); if (box) box.classList.remove('has'); el.outerHTML = '<span class="combo-caret">&#9662;</span>'; if (el.dataset.key === '__bulkUser') { S.bulk.preview = false; renderView(); } },
   replaceOne: (el) => startReplace([companyById(el.dataset.id)], companyById(S.pick[el.dataset.id])),
   replaceSelected: () => { const sources = S.companies.filter((c) => S.cSel.has(c.id)); if (!sources.length) return showError('Tick the companies to replace first.'); return startReplace(sources, companyById(S.pick.__bulk)); },
@@ -1225,17 +1405,18 @@ const IN = {
   jValue: (el) => { S.jobs.value = el.value; },
   abrGuid: (el) => { S.abn.guid = el.value.trim(); localStorage.setItem('abrGuid', S.abn.guid); },
   abnSearch: (el) => { S.abn.search = el.value; S.abn.limit = PAGE_STEP; rerender(); },
+  xdelSearch: (el) => { S.xdel.search = el.value; S.xdel.limit = PAGE_STEP; rerender(); },
   auditSearch: (el) => { S.audit.search = el.value; debouncedAudit(); },
   moveSearch: (el) => { S.move.search = el.value; debouncedMove(); }
 };
 const CH = {
-  hub: (el) => { S.hub = el.value; S.companies = []; S.companiesLoaded = false; S.projects = []; S.projectsLoaded = false; S.user.users = []; S.user.loaded = false; S.access.members = []; S.pick = {}; S.abn.rows = []; S.abn.sel.clear(); renderView(); },
+  hub: (el) => { S.hub = el.value; S.companies = []; S.companiesLoaded = false; S.projects = []; S.projectsLoaded = false; S.user.users = []; S.user.loaded = false; S.access.members = []; S.pick = {}; S.abn.rows = []; S.abn.sel.clear(); if (S.xdel.raw.length) xdelMatch(); renderView(); },
   row: (el) => {
     const set = SETS()[el.dataset.set];
     if (el.checked) set.add(el.dataset.id); else set.delete(el.dataset.id);
     if (el.dataset.set === 'bulkSel') S.bulk.preview = false;
     if (el.dataset.set === 'moveSel') { paintMove(); return; }
-    if (el.dataset.set === 'abnSel' || (S.only[el.dataset.set] && !el.checked)) { renderView(); return; }
+    if (el.dataset.set === 'abnSel' || el.dataset.set === 'xdelSel' || (S.only[el.dataset.set] && !el.checked)) { renderView(); return; }
     paintCounts();
   },
   only: (el) => { S.only[el.dataset.set] = el.checked; repaint(el.dataset.set); },
@@ -1243,6 +1424,9 @@ const CH = {
   cStatus: (el) => { S.cf.status = el.value; S.cLimit = PAGE_STEP; renderView(); },
   logo: (el) => uploadLogo(el.dataset.id, el.files[0]),
   erpFile: (el) => erpFile(el.files[0]), importFile: (el) => importFile(el.files[0]),
+  xdelFile: (el) => xdelFile(el.files[0]),
+  xdelSheet: (el) => xdelLoadSheet(el.value),
+  xdelCol: (el) => { S.xdel.cols[el.dataset.k] = el.value; xdelMatch(); renderView(); },
   auditRow: (el) => { if (el.checked) S.audit.sel.add(el.dataset.key); else S.audit.sel.delete(el.dataset.key); paintAudit(); },
   moveOpt: (el) => { S.moveOpts[el.dataset.k] = el.checked; paintMove(); },
   abnScope: (el) => { S.abn.scope = el.value; renderView(); },
