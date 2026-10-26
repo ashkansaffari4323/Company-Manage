@@ -14,3 +14,10 @@ Complete replacement package (one Vercel API function: `api/index.js`).
 6. Export Comparison Report: Summary, All Rows, In Hub, Check, Not in Hub, Deleted.
 
 All earlier features retained.
+
+
+### New in v39: Company Address Upload
+- Added as a new tab without removing any v38 feature.
+- Matches Supplier ID / S Code to Hub ERP ID.
+- Supports Supplier List multiline addresses and clean template.
+- Preview, select, export comparison, typed confirmation and AUS regional update.

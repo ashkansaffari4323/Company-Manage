@@ -1,5 +1,5 @@
 'use strict';
-/* Company Manage v38 - admin console for Autodesk Construction Cloud / BIM 360 */
+/* Company Manage v39 - admin console for Autodesk Construction Cloud / BIM 360 */
 
 const API = '/api/index?action=';
 const PAGE_STEP = 300;
@@ -18,6 +18,7 @@ const S = {
   xdel: { file: '', wb: null, sheets: [], sheet: '', headerRow: 1, cols: {}, headers: [], raw: [], rows: [], sel: new Set(), search: '', filter: 'all', limit: PAGE_STEP,
     running: false, opts: { nameFallback: true, altCode: true } },
   imp: { rows: [], file: '' },
+  addr: { rows: [], file: '', sel: new Set(), search: '', filter: 'all', limit: PAGE_STEP, running: false },
   only: {}, pick: {}, moveOpts: { hub: true, purge: false }, move: null, audit: null, reports: []
 };
 
@@ -109,7 +110,7 @@ function keepFocus(paint) {
   if (id) { const el = document.getElementById(id); if (el && el.tagName === 'INPUT') { el.focus(); try { el.setSelectionRange(pos, pos); } catch { /* ignore */ } } }
 }
 
-const SETS = () => ({ cSel: S.cSel, pSel: S.access.pSel, mSel: S.access.mSel, uProjSel: S.user.pSel, bulkSel: S.bulk.sel, jobSel: S.jobs.sel, abnSel: S.abn.sel, xdelSel: S.xdel.sel, moveSel: S.move ? S.move.sel : new Set() });
+const SETS = () => ({ cSel: S.cSel, pSel: S.access.pSel, mSel: S.access.mSel, uProjSel: S.user.pSel, bulkSel: S.bulk.sel, jobSel: S.jobs.sel, abnSel: S.abn.sel, xdelSel: S.xdel.sel, addrSel: S.addr.sel, moveSel: S.move ? S.move.sel : new Set() });
 function paintCounts() { const sets = SETS(); document.querySelectorAll('[data-count]').forEach((el) => { el.textContent = `${sets[el.dataset.count].size} selected`; }); }
 
 /* ------------------------------------------------- company combobox */
@@ -222,7 +223,7 @@ function abnRows() {
 }
 
 /* ---------------------------------------------------------------- shell */
-const TABS = [['dashboard', 'Dashboard'], ['companies', 'Company Directory'], ['xdel', 'Delete by S Code'], ['abn', 'ABN Lookup'], ['import', 'Import Companies'], ['access', 'Users & Access'], ['user', 'User Removal'], ['bulk', 'Bulk User Company'], ['numbers', 'Project Numbers'], ['reports', 'Reports & Excel']];
+const TABS = [['dashboard', 'Dashboard'], ['companies', 'Company Directory'], ['address', 'Company Address Upload'], ['xdel', 'Delete by S Code'], ['abn', 'ABN Lookup'], ['import', 'Import Companies'], ['access', 'Users & Access'], ['user', 'User Removal'], ['bulk', 'Bulk User Company'], ['numbers', 'Project Numbers'], ['reports', 'Reports & Excel']];
 
 function render() {
   comboClose();
@@ -268,6 +269,7 @@ VIEWS.dashboard = () => {
     <li><b>Company Directory</b> - filters, ERP/Tax IDs, logos, Members/Projects audit, Replace with (verified), Auto Rename, Bulk ERP/Tax, Remove Members + Purge.</li>
     <li><b>Delete by S Code</b> - upload the Workday supplier export (or the template). Each Workday S code is compared with the Hub company ERP ID; select the matches and delete them.</li>
     <li><b>ABN Lookup</b> - checks companies against the Australian Business Register and fills ABN, state and postcode.</li>
+    <li><b>Company Address Upload</b> - match Supplier ID / S Code to ERP ID, preview and update addresses from Excel.</li>
     <li><b>Import Companies</b>, <b>Users &amp; Access</b>, <b>User Removal</b>, <b>Bulk User Company</b>, <b>Project Numbers</b>, <b>Reports &amp; Excel</b>.</li></ul></div>`;
 };
 
@@ -1085,6 +1087,85 @@ function moveExport() {
   exportRows(`Replace_${M.target.name.slice(0, 20)}.xlsx`, M.rows.map((r) => ({ Project: r.projectName, Platform: r.projectPlatform || 'acc', Member: r.name, Email: r.email, 'Original company': (companyById(r.sourceId) || {}).name || '', 'Target company': M.target.name, Result: r.status2, Error: r.err || '' })), 'Replace');
 }
 
+
+/* ================================================= COMPANY ADDRESS UPLOAD */
+const ADDRESS_TEMPLATE = [
+  { 'S Code': 'S-200001', 'Supplier Name': 'Example Supplier Pty Ltd', 'Address Line 1': '123 Example Street', 'Address Line 2': 'Level 2', City: 'Adelaide', 'State/Province': 'SA', 'Postal Code': '5000', Country: 'Australia' }
+];
+const STATE_NAMES = { ACT: 'Australian Capital Territory', NSW: 'New South Wales', NT: 'Northern Territory', QLD: 'Queensland', SA: 'South Australia', TAS: 'Tasmania', VIC: 'Victoria', WA: 'Western Australia' };
+const countryName = (v) => ({ AU: 'Australia', AUS: 'Australia', AUSTRALIA: 'Australia', NZ: 'New Zealand', 'NEW ZEALAND': 'New Zealand' }[String(v || 'Australia').trim().toUpperCase()] || String(v || 'Australia').trim());
+function addressText(x) { return [x.address1, x.address2, x.city, x.state, x.postcode, x.country].filter(Boolean).join(', '); }
+function parseSupplierAddress(v) {
+  const lines = String(v || '').split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+  let country = 'Australia';
+  if (lines.length && /^(australia|new zealand|singapore|malaysia|united states.*)$/i.test(lines[lines.length - 1])) country = lines.pop();
+  const local = lines.pop() || '';
+  const m = local.match(/^(.*?)(?:,)?\s+(ACT|NSW|NT|QLD|SA|TAS|VIC|WA)\s+(\d{4})$/i);
+  return { address1: lines.shift() || '', address2: lines.join(', '), city: m ? m[1].trim() : local, state: m ? STATE_NAMES[m[2].toUpperCase()] : '', postcode: m ? m[3] : '', country: countryName(country) };
+}
+function addressCol(headers, names) { const n = headers.map((h) => norm(h)); for (const x of names) { const i = n.indexOf(norm(x)); if (i >= 0) return headers[i]; } return ''; }
+async function addressFile(file) {
+  if (!file) return;
+  if (typeof XLSX === 'undefined') return showError('The Excel reader is not available. Reload the page.');
+  if (!S.companiesLoaded) return showError('Load all companies first, then upload the address file.');
+  const wb = XLSX.read(await file.arrayBuffer()), ws = wb.Sheets[wb.SheetNames[0]], raw = XLSX.utils.sheet_to_json(ws, { defval: '' });
+  const h = Object.keys(raw[0] || {}), code = addressCol(h, ['S Code', 'Supplier ID', 'ERP ID', 'Supplier Code']), name = addressCol(h, ['Supplier Name', 'Company Name', 'Name']);
+  const full = addressCol(h, ['Address']), a1 = addressCol(h, ['Address Line 1', 'Street Address']), a2 = addressCol(h, ['Address Line 2']);
+  const city = addressCol(h, ['City', 'Suburb']), state = addressCol(h, ['State/Province', 'State or Province', 'State']), post = addressCol(h, ['Postal Code', 'Postcode']), country = addressCol(h, ['Country']);
+  if (!code) return showError('No Supplier ID / S Code column was found. Use the template or the original Supplier List export.');
+  const byCode = new Map();
+  S.companies.filter((c) => c.status !== 'deleted').forEach((c) => codeTokens(c.erpId).forEach((k) => { if (!byCode.has(k)) byCode.set(k, []); byCode.get(k).push(c); }));
+  S.addr.rows = raw.map((r, i) => {
+    const sc = String(r[code] || '').trim(), supplier = String(r[name] || '').trim();
+    let ad = full ? parseSupplierAddress(r[full]) : { address1: String(r[a1] || '').trim(), address2: String(r[a2] || '').trim(), city: String(r[city] || '').trim(), state: String(r[state] || '').trim(), postcode: String(r[post] || '').trim(), country: countryName(r[country]) };
+    ad.state = STATE_NAMES[String(ad.state || '').toUpperCase()] || ad.state;
+    ad.country = countryName(ad.country);
+    const matches = byCode.get(codeKey(sc)) || [], company = matches.length === 1 ? matches[0] : null;
+    let status = matches.length === 1 ? 'Matched' : matches.length > 1 ? 'Multiple matches' : 'Not found';
+    if (!ad.address1 && !ad.city && !ad.postcode) status = 'No address';
+    const changed = company ? addressText(company) !== addressText(ad) : false;
+    return { key: `a${i}`, row: i + 2, sCode: sc, supplier, ...ad, company, status, changed, result: '', error: '' };
+  });
+  S.addr.file = file.name; S.addr.sel = new Set(S.addr.rows.filter((r) => r.status === 'Matched' && r.changed).map((r) => r.key)); S.addr.limit = PAGE_STEP; renderView();
+}
+function addressRows() {
+  const A = S.addr, q = A.search.trim().toLowerCase();
+  return A.rows.filter((r) => (A.filter === 'all' || (A.filter === 'changes' ? r.status === 'Matched' && r.changed : r.status === A.filter)) && hasText([r.sCode, r.supplier, r.company && r.company.name, r.status, r.result, addressText(r)], q));
+}
+VIEWS.address = () => {
+  const A = S.addr, rows = addressRows(), shown = rows.slice(0, A.limit), selected = A.rows.filter((r) => A.sel.has(r.key) && r.status === 'Matched' && r.changed);
+  const count = (x) => A.rows.filter((r) => x === 'changes' ? r.status === 'Matched' && r.changed : r.status === x).length;
+  return `<div class="card"><h3>Upload and update company addresses</h3>
+    <p class="muted">Upload the complete Supplier List export or the clean template. Supplier ID / S Code is matched to the Hub company ERP ID. Review every change before updating.</p>
+    <div class="bar"><button class="btn light" data-act="addressTemplate">Download Address Template</button><input type="file" accept=".xlsx,.xls,.csv" data-ch="addressFile">
+      ${S.companiesLoaded ? `<span class="badge good">${S.companies.length.toLocaleString()} companies loaded</span>` : '<button class="btn" data-act="loadCompanies">Load Hub companies first</button>'}</div>
+    ${A.file ? `<div class="notice"><b>${esc(A.file)}</b> · ${A.rows.length} rows · ${count('Matched')} matched · ${count('changes')} changed · ${count('Not found')} not found</div>` : ''}</div>
+  ${A.rows.length ? `<div class="card"><div class="bar"><input id="addrSearch" class="input grow" data-in="addrSearch" placeholder="Search S Code, supplier, Hub company, address or result" value="${esc(A.search)}">
+    <select class="select" data-ch="addrFilter"><option value="all">All rows</option><option value="changes" ${A.filter === 'changes' ? 'selected' : ''}>Matched changes</option><option ${A.filter === 'Matched' ? 'selected' : ''}>Matched</option><option ${A.filter === 'Not found' ? 'selected' : ''}>Not found</option><option ${A.filter === 'Multiple matches' ? 'selected' : ''}>Multiple matches</option><option ${A.filter === 'No address' ? 'selected' : ''}>No address</option></select></div>
+    <div class="bar"><button class="btn soft" data-act="addressSelectChanged">Select all matched changes</button><button class="btn light" data-act="addressClear">Deselect all</button><span class="badge">${A.sel.size} selected</span>
+      <button class="btn light" data-act="addressExport">Export Comparison</button><button class="btn" data-act="addressApply" ${A.running || !selected.length ? 'disabled' : ''}>${A.running ? 'Updating...' : `Update ${selected.length} Addresses`}</button></div>
+    ${tbl(['Select', 'Row', 'S Code', 'Excel Supplier', 'Hub Company', 'Current Address', 'New Address', 'Result'], shown.map((r) => [r.status === 'Matched' && r.changed ? `<input type="checkbox" data-ch="addrRow" data-key="${esc(r.key)}" ${A.sel.has(r.key) ? 'checked' : ''}>` : '-', r.row, `<b>${esc(r.sCode)}</b>`, esc(r.supplier), esc(r.company ? r.company.name : ''), esc(r.company ? addressText(r.company) : ''), esc(addressText(r)), `<span class="badge ${r.result === 'Updated' || r.status === 'Matched' ? 'good' : r.result === 'Failed' ? 'bad' : 'warn'}">${esc(r.result || (r.status === 'Matched' && !r.changed ? 'No change' : r.status))}</span>${r.error ? `<div class="bad small">${esc(r.error)}</div>` : ''}`]), 'No rows match.')}
+    ${moreBtn('addrLimit', shown.length, rows.length)}</div>` : ''}`;
+};
+function addressTemplate() { exportRows('Company_Address_Update_Template.xlsx', ADDRESS_TEMPLATE, 'Company Addresses'); }
+function addressExport() { exportRows('Company_Address_Comparison.xlsx', S.addr.rows.map((r) => ({ Row: r.row, 'S Code': r.sCode, 'Excel Supplier': r.supplier, 'Hub Company': r.company ? r.company.name : '', 'Current Address': r.company ? addressText(r.company) : '', 'New Address': addressText(r), Match: r.status, Changed: r.changed ? 'Yes' : 'No', Result: r.result, Error: r.error })), 'Comparison'); }
+async function addressApply() {
+  const A = S.addr, rows = A.rows.filter((r) => A.sel.has(r.key) && r.status === 'Matched' && r.changed);
+  if (!rows.length) return showError('Select at least one matched address change.');
+  if (prompt(`Update ${rows.length} company address(es)?\n\nType UPDATE ADDRESSES to continue.`) !== 'UPDATE ADDRESSES') return;
+  A.running = true; renderView(); const all = [], region = (S.hubs.find((h) => h.id === S.hub) || {}).region || 'AUS';
+  try {
+    for (let i = 0; i < rows.length; i += 25) {
+      const items = rows.slice(i, i + 25).map((r) => ({ id: r.company.id, name: r.company.name, address_line_1: r.address1, address_line_2: r.address2, city: r.city, state_or_province: r.state, postal_code: r.postcode, country: r.country }));
+      const d = await api('companies-bulk-update', { body: { hubId: S.hub, region, useUserToken: true, items } }); all.push(...d.results);
+      setQueue(`Updating addresses: ${Math.min(i + 25, rows.length)} of ${rows.length}`, 100 * Math.min(i + 25, rows.length) / rows.length);
+    }
+    all.forEach((x) => { const r = rows.find((z) => z.company.id === x.id); if (!r) return; r.result = x.success ? 'Updated' : 'Failed'; r.error = x.error || ''; if (x.success) { Object.assign(r.company, { address1: r.address1, address2: r.address2, city: r.city, state: r.state, postcode: r.postcode, country: r.country }); r.changed = false; A.sel.delete(r.key); } });
+    pushReports(all.map((x) => ({ Type: 'Company address update', Name: x.name, Result: x.success ? 'Success' : 'Failed', Detail: x.success ? Object.entries(x.sent).map(([k, v]) => `${k}=${v}`).join('; ') : x.error })));
+    flash(`Address update complete: ${all.filter((x) => x.success).length} updated, ${all.filter((x) => !x.success).length} failed.`);
+  } finally { A.running = false; setQueue(null); renderView(); }
+}
+
 /* ---------------------------------------------------------- import */
 const IMPORT_COLUMNS = [['Name', 'name'], ['Trade', 'trade'], ['Address Line 1', 'address_line_1'], ['Address Line 2', 'address_line_2'], ['City', 'city'], ['State or Province', 'state_or_province'], ['Postal Code', 'postal_code'], ['Country', 'country'], ['Phone', 'phone'], ['Website URL', 'website_url'], ['Description', 'description'], ['ERP ID', 'erp_id'], ['Tax ID', 'tax_id']];
 VIEWS.import = () => {
@@ -1364,6 +1445,7 @@ const SELECT_ALL = {
   uProjSel: () => userProjects().map((p) => p.projectId), bulkSel: () => bulkUsers().map((u) => u.id), jobSel: () => filteredJobs().map((p) => p.id),
   abnSel: () => abnRows().filter((r) => !isDeleted(r)).map((r) => r.id),
   xdelSel: () => xdelRows().filter(xdelSelectable).map((r) => r.key),
+  addrSel: () => addressRows().filter((r) => r.status === 'Matched' && r.changed).map((r) => r.key),
   moveSel: () => moveRows().filter((r) => !isBim(r.projectPlatform) && !/Moved/.test(r.status2)).map((r) => r.key)
 };
 const repaint = (set) => (set === 'moveSel' ? paintMove() : renderView());
@@ -1375,7 +1457,7 @@ const ACT = {
   auth: async () => { if (S.connected) { await api('auth-logout', { body: {} }); location.reload(); } else { location.href = (await api('auth-login')).url; } },
   refreshHubs: async () => { await loadHubs(); render(); },
   closeModal,
-  more: (el) => { const map = { cLimit: [S, 'cLimit'], mLimit: [S.access, 'mLimit'], uLimit: [S.user, 'limit'], bLimit: [S.bulk, 'limit'], jLimit: [S.jobs, 'limit'], abnLimit: [S.abn, 'limit'], xdelLimit: [S.xdel, 'limit'] }[el.dataset.k]; map[0][map[1]] += PAGE_STEP; renderView(); },
+  more: (el) => { const map = { cLimit: [S, 'cLimit'], mLimit: [S.access, 'mLimit'], uLimit: [S.user, 'limit'], bLimit: [S.bulk, 'limit'], jLimit: [S.jobs, 'limit'], abnLimit: [S.abn, 'limit'], xdelLimit: [S.xdel, 'limit'], addrLimit: [S.addr, 'limit'] }[el.dataset.k]; map[0][map[1]] += PAGE_STEP; renderView(); },
   selectAll: (el) => { const set = el.dataset.set; SELECT_ALL[set]().forEach((id) => SETS()[set].add(id)); S.bulk.preview = false; repaint(set); },
   clearSel: (el) => { const set = el.dataset.set; SETS()[set].clear(); S.only[set] = false; S.bulk.preview = false; repaint(set); },
   quick: (el) => { resetFilters(); S.cf[el.dataset.q] = true; S.cLimit = PAGE_STEP; S.tab = 'companies'; render(); },
@@ -1394,6 +1476,9 @@ const ACT = {
   xdelFilter: (el) => { S.xdel.filter = el.dataset.k; S.xdel.limit = PAGE_STEP; renderView(); },
   xdelSelectExact: () => { S.xdel.rows.filter((r) => r.status === 'Match' && r.by === 'S code = ERP ID' && !r.check).forEach((r) => S.xdel.sel.add(r.key)); renderView(); },
   xdelDelete, xdelExport,
+  addressTemplate, addressApply, addressExport,
+  addressSelectChanged: () => { S.addr.rows.filter((r) => r.status === 'Matched' && r.changed).forEach((r) => S.addr.sel.add(r.key)); renderView(); },
+  addressClear: () => { S.addr.sel.clear(); renderView(); },
   comboClear: (el, e) => { e.preventDefault(); delete S.pick[el.dataset.key]; const i = document.getElementById('combo_' + el.dataset.key); if (i) { i.value = ''; i.focus(); } const box = el.closest('.combo'); if (box) box.classList.remove('has'); el.outerHTML = '<span class="combo-caret">&#9662;</span>'; if (el.dataset.key === '__bulkUser') { S.bulk.preview = false; renderView(); } },
   replaceOne: (el) => startReplace([companyById(el.dataset.id)], companyById(S.pick[el.dataset.id])),
   replaceSelected: () => { const sources = S.companies.filter((c) => S.cSel.has(c.id)); if (!sources.length) return showError('Tick the companies to replace first.'); return startReplace(sources, companyById(S.pick.__bulk)); },
@@ -1432,11 +1517,12 @@ const IN = {
   abrGuid: (el) => { S.abn.guid = el.value.trim(); localStorage.setItem('abrGuid', S.abn.guid); },
   abnSearch: (el) => { S.abn.search = el.value; S.abn.limit = PAGE_STEP; rerender(); },
   xdelSearch: (el) => { S.xdel.search = el.value; S.xdel.limit = PAGE_STEP; rerender(); },
+  addrSearch: (el) => { S.addr.search = el.value; S.addr.limit = PAGE_STEP; rerender(); },
   auditSearch: (el) => { S.audit.search = el.value; debouncedAudit(); },
   moveSearch: (el) => { S.move.search = el.value; debouncedMove(); }
 };
 const CH = {
-  hub: (el) => { S.hub = el.value; S.companies = []; S.companiesLoaded = false; S.projects = []; S.projectsLoaded = false; S.user.users = []; S.user.loaded = false; S.access.members = []; S.pick = {}; S.abn.rows = []; S.abn.sel.clear(); if (S.xdel.raw.length) xdelMatch(); renderView(); },
+  hub: (el) => { S.hub = el.value; S.companies = []; S.companiesLoaded = false; S.projects = []; S.projectsLoaded = false; S.user.users = []; S.user.loaded = false; S.access.members = []; S.pick = {}; S.abn.rows = []; S.abn.sel.clear(); if (S.xdel.raw.length) xdelMatch(); S.addr.rows = []; S.addr.sel.clear(); renderView(); },
   row: (el) => {
     const set = SETS()[el.dataset.set];
     if (el.checked) set.add(el.dataset.id); else set.delete(el.dataset.id);
@@ -1451,6 +1537,7 @@ const CH = {
   logo: (el) => uploadLogo(el.dataset.id, el.files[0]),
   erpFile: (el) => erpFile(el.files[0]), importFile: (el) => importFile(el.files[0]),
   xdelFile: (el) => xdelFile(el.files[0]),
+  addressFile: (el) => addressFile(el.files[0]), addrRow: (el) => { if (el.checked) S.addr.sel.add(el.dataset.key); else S.addr.sel.delete(el.dataset.key); paintCounts(); }, addrFilter: (el) => { S.addr.filter = el.value; S.addr.limit = PAGE_STEP; renderView(); },
   xdelSheet: (el) => xdelLoadSheet(el.value),
   xdelCol: (el) => { S.xdel.cols[el.dataset.k] = el.value; xdelMatch(); renderView(); },
   xdelOpt: (el) => { S.xdel.opts[el.dataset.k] = el.checked; xdelMatch(); renderView(); },

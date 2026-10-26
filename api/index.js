@@ -27,7 +27,7 @@ H['auth-logout'] = async (req, res) => { clearSession(res); res.json({ ok: true 
 H['hubs'] = async (req, res) => {
   const t = await userToken(req, res);
   const r = await get(`${APS}/project/v1/hubs`, t);
-  res.json({ hubs: (r.data.data || []).map((h) => ({ id: h.id, name: (h.attributes && h.attributes.name) || h.id })) });
+  res.json({ hubs: (r.data.data || []).map((h) => ({ id: h.id, name: (h.attributes && h.attributes.name) || h.id, region: String(h.attributes?.extension?.data?.region || 'AUS').toUpperCase().replace('APAC', 'AUS') })) });
 };
 
 /* ----------------------------------------------------------- companies */
@@ -43,7 +43,7 @@ H['companies-page'] = async (req, res) => {
     items: p.items.map((c) => ({
       id: c.id, name: c.name || '', trade: c.trade || '', erpId: c.erpId || '', taxId: c.taxId || '',
       status: c.status || '', members: Number(c.userSize || 0), projects: Number(c.projectSize || 0), imageUrl: c.imageUrl || '',
-      address1: c.addressLine1 || '', city: c.city || '', state: c.stateOrProvince || '', postcode: c.postalCode || '', country: c.country || ''
+      address1: c.addressLine1 || '', address2: c.addressLine2 || '', city: c.city || '', state: c.stateOrProvince || '', postcode: c.postalCode || '', country: c.country || ''
     }))
   });
 };
@@ -60,14 +60,15 @@ H['company-update'] = async (req, res) => {
 };
 
 H['companies-bulk-update'] = async (req, res) => {
-  const t = await appToken('account:write');
+  const t = req.body.useUserToken ? await userToken(req, res) : await appToken('account:write');
   const aid = account(req.body.hubId);
+  const region = String(req.body.region || 'AUS').toUpperCase().replace('APAC', 'AUS');
   const results = await pool(req.body.items || [], 5, async (item) => {
     const body = {};
     for (const k of COMPANY_FIELDS) if (k !== 'name' && item[k] !== undefined && item[k] !== '') body[k] = String(item[k]).trim();
     if (!Object.keys(body).length) return { id: item.id, name: item.name, success: false, sent: body, error: 'Nothing to update' };
     try {
-      await request('patch', `${APS}/hq/v1/accounts/${aid}/companies/${item.id}`, t, { data: body, headers: JSON_HEADERS });
+      await request('patch', `${APS}/hq/v1/accounts/${aid}/companies/${item.id}`, t, { data: body, headers: { ...JSON_HEADERS, Region: region } });
       return { id: item.id, name: item.name, success: true, sent: body };
     } catch (e) {
       return { id: item.id, name: item.name, success: false, sent: body, error: errorText(e) };
