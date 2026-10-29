@@ -43,7 +43,7 @@ H['companies-page'] = async (req, res) => {
     items: p.items.map((c) => ({
       id: c.id, name: c.name || '', trade: c.trade || '', erpId: c.erpId || '', taxId: c.taxId || '',
       status: c.status || '', members: Number(c.userSize || 0), projects: Number(c.projectSize || 0), imageUrl: c.imageUrl || '',
-      address1: c.addressLine1 || '', address2: c.addressLine2 || '', city: c.city || '', state: c.stateOrProvince || '', postcode: c.postalCode || '', country: c.country || ''
+      address1: c.addressLine1 || '', address2: c.addressLine2 || '', city: c.city || '', state: c.stateOrProvince || '', postcode: c.postalCode || '', country: c.country || '', isHostCompany: !!(c.isHostCompany || c.is_host_company || c.hostCompany || c.host_company || c.type === 'host')
     }))
   });
 };
@@ -107,6 +107,7 @@ H['companies-purge'] = async (req, res) => {
   const t = await appToken('account:write');
   const aid = account(req.body.hubId);
   const results = await pool(req.body.companies || [], 5, async (c) => {
+    if (c.isHostCompany) return { id: c.id, name: c.name, success: false, error: 'Host company is protected and cannot be deleted.' };
     try {
       await request('patch', `${APS}/hq/v1/accounts/${aid}/companies/${c.id}`, t, { data: { name: `removed ${new Date().toISOString().slice(0, 10)} ${c.id}`, status: 'deleted' }, headers: JSON_HEADERS });
       return { id: c.id, name: c.name, success: true };

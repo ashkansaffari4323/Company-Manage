@@ -30,3 +30,12 @@ All earlier features retained.
 - Identifies unresolved/stale directory counters separately from visible members.
 - Blocks deletion while project scan errors, project memberships, or Hub-default users remain.
 - Allows a guarded Autodesk soft-delete only after the audit is clear.
+
+## v41: Archived Projects company and member cleanup
+- New Archived Projects tab for archived, inactive, closed and template projects.
+- Lists project company/member relationships and unreadable projects.
+- Reassigns ACC project memberships to another company with Autodesk read-back verification.
+- Removes selected memberships where Autodesk permits the operation.
+- Exports archived-project company/member evidence to Excel.
+- Detects and protects the Hub Host company from purge workflows.
+- BIM 360 rows remain visible and report API failures for manual administration.

@@ -19,6 +19,7 @@ const S = {
     running: false, opts: { nameFallback: true, altCode: true } },
   imp: { rows: [], file: '' },
   addr: { rows: [], file: '', sel: new Set(), search: '', filter: 'all', limit: PAGE_STEP, running: false },
+  archived: { projects: [], members: [], errors: [], pSel: new Set(), mSel: new Set(), search: '', loaded: false, running: false },
   only: {}, pick: {}, moveOpts: { hub: true, purge: false }, move: null, audit: null, reports: []
 };
 
@@ -223,7 +224,7 @@ function abnRows() {
 }
 
 /* ---------------------------------------------------------------- shell */
-const TABS = [['dashboard', 'Dashboard'], ['companies', 'Company Directory'], ['address', 'Company Address Upload'], ['xdel', 'Delete by S Code'], ['abn', 'ABN Lookup'], ['import', 'Import Companies'], ['access', 'Users & Access'], ['user', 'User Removal'], ['bulk', 'Bulk User Company'], ['numbers', 'Project Numbers'], ['reports', 'Reports & Excel']];
+const TABS = [['dashboard', 'Dashboard'], ['companies', 'Company Directory'], ['address', 'Company Address Upload'], ['xdel', 'Delete by S Code'], ['abn', 'ABN Lookup'], ['import', 'Import Companies'], ['access', 'Users & Access'], ['archived', 'Archived Projects'], ['user', 'User Removal'], ['bulk', 'Bulk User Company'], ['numbers', 'Project Numbers'], ['reports', 'Reports & Excel']];
 
 function render() {
   comboClose();
@@ -293,7 +294,7 @@ VIEWS.companies = () => {
       <p class="muted small">Every member of the selected companies, in every project, is moved to the chosen company with preview, test and read-back verification.</p></div>
     ${tbl(['Select', 'Logo', 'Company', 'Trade', 'ERP ID / S code', 'Tax ID', 'State / Postcode', 'Status', 'Members', 'Projects', 'Replace with (moves all members)', 'Logo upload'],
       shown.map((c) => [rowBox('cSel', c.id, S.cSel.has(c.id)),
-        c.imageUrl ? `<img class="logo" src="${esc(c.imageUrl)}" alt="">` : '<span class="muted">-</span>',
+        c.isHostCompany ? '<span class="badge warn">Host company</span>' : c.imageUrl ? `<img class="logo" src="${esc(c.imageUrl)}" alt="">` : '<span class="muted">-</span>',
         esc(c.name), esc(c.trade),
         c.erpId ? esc(c.erpId) : `<button class="btn soft small" data-act="addField" data-kind="erp" data-id="${esc(c.id)}">+ Add ERP ID</button>`,
         c.taxId ? esc(c.taxId) : `<button class="btn soft small" data-act="addField" data-kind="tax" data-id="${esc(c.id)}">+ Add Tax ID</button>`,
@@ -943,7 +944,7 @@ async function auditPurge() {
   const st = S.audit;
   if (st.members.length || st.hubUsers.length || st.errors.length) return showError('Resolve all project memberships, Hub users and scan errors first.');
   if (prompt(`Mark "${st.company.name}" as deleted in Autodesk?\n\nType DELETE COMPANY to continue.`) !== 'DELETE COMPANY') return;
-  const d = await api('companies-purge', { body: { hubId: S.hub, companies: [{ id: st.company.id, name: st.company.name }] } });
+  const d = await api('companies-purge', { body: { hubId: S.hub, companies: [{ id: st.company.id, name: st.company.name, isHostCompany: !!st.company.isHostCompany }] } });
   const r = d.results && d.results[0];
   pushReports([{ Type: 'Company audit (delete company)', Name: st.company.name, Result: r && r.success ? 'Success' : 'Failed', Detail: r && r.error || '' }]);
   if (r && r.success) { S.companies = S.companies.filter((c) => c.id !== st.company.id); S.cSel.delete(st.company.id); closeModal(); flash('Company marked deleted.'); renderView(); }
@@ -978,7 +979,7 @@ async function purgeCompanyList(list, label) {
     return true;
   });
   for (let i = 0; i < deletable.length; i += 25) {
-    const d = await api('companies-purge', { body: { hubId: S.hub, companies: deletable.slice(i, i + 25).map((c) => ({ id: c.id, name: c.name })) } });
+    const d = await api('companies-purge', { body: { hubId: S.hub, companies: deletable.slice(i, i + 25).map((c) => ({ id: c.id, name: c.name, isHostCompany: !!c.isHostCompany })) } });
     d.results.forEach((r) => { if (r.success) deleted.add(r.id); else kept.set(r.id, r.error); });
     pushReports(d.results.map((r) => ({ Type: `${label} (delete company)`, Name: r.name, Result: r.success ? 'Success' : 'Failed', Detail: r.error || '' })));
     setQueue(`${label}: deleting companies ${Math.min(i + 25, deletable.length)} of ${deletable.length}`, 100 * Math.min(i + 25, deletable.length) / deletable.length);
@@ -991,8 +992,8 @@ async function purgeCompanyList(list, label) {
 }
 
 async function deepPurge() {
-  const selected = filteredCompanies().filter((c) => S.cSel.has(c.id));
-  if (!selected.length) return showError('Select at least one company first.');
+  const selected = filteredCompanies().filter((c) => S.cSel.has(c.id) && !c.isHostCompany);
+  if (!selected.length) return showError('Select at least one non-host company first. The Host company is protected.');
   if (prompt(`This removes every project member assigned to ${companies(selected.length)} and then deletes them.\n\nType PURGE to continue.`) !== 'PURGE') return;
   const { deleted } = await purgeCompanyList(selected, 'Company purge');
   setQueue(null);
@@ -1111,7 +1112,7 @@ async function moveRun() {
     if (S.moveOpts.purge) {
       const clean = M.sources.filter((src) => !M.errors.length && M.rows.filter((r) => r.sourceId === src.id).every((r) => /Moved/.test(r.status2)));
       if (clean.length) {
-        const d = await api('companies-purge', { body: { hubId: S.hub, companies: clean.map((c) => ({ id: c.id, name: c.name })) } });
+        const d = await api('companies-purge', { body: { hubId: S.hub, companies: clean.map((c) => ({ id: c.id, name: c.name, isHostCompany: !!c.isHostCompany })) } });
         M.purged = d.results.filter((r) => r.success).map((r) => r.id);
         S.companies = S.companies.filter((c) => !M.purged.includes(c.id));
         pushReports(d.results.map((r) => ({ Type: 'Replace company (delete old)', Name: r.name, Result: r.success ? 'Success' : 'Failed', Detail: r.error || '' })));
@@ -1325,6 +1326,45 @@ async function removeMembers() {
   a.members = a.members.filter((m) => !ok.has(m.key)); a.mSel.clear();
   flash(`${ok.size} removed, ${out.length - ok.size} failed.`); renderView();
 }
+
+/* ------------------------------------------ archived projects and members */
+const isArchivedProject = (p) => /archiv|inactive|closed|template/i.test(`${p.status || ''} ${p.classification || ''} ${p.type || ''}`);
+function archivedProjectRows() {
+  const A = S.archived, q = norm(A.search);
+  return A.projects.filter((p) => hasText([p.name, p.status, p.classification, p.platform, p.id], q));
+}
+VIEWS.archived = () => {
+  const A = S.archived, projects = archivedProjectRows();
+  const members = A.members.filter((m) => hasText([m.projectName, m.name, m.email, m.company, m.status, roleNames(m.roles)], norm(A.search)));
+  const companiesFound = new Map();
+  A.members.forEach((m) => { if (m.companyId) { const x = companiesFound.get(m.companyId) || { id:m.companyId, name:m.company, members:0, projects:new Set() }; x.members++; x.projects.add(m.projectId); companiesFound.set(m.companyId,x); } });
+  return `<div class="notice"><b>Archived Project Companies & Members</b> scans projects returned by Autodesk whose status/classification contains Archived, Inactive, Closed or Template. ACC memberships can be reassigned or removed. BIM 360 rows are shown but must be corrected in BIM 360 administration if Autodesk rejects the change.</div>
+  <div class="card"><div class="bar"><input id="archSearch" class="input grow" data-in="archSearch" placeholder="Search archived project, member, email or company" value="${esc(A.search)}">
+    <button class="btn" data-act="loadArchived">${A.loaded ? 'Reload Archived Projects' : 'Load Archived Projects'}</button>
+    <button class="btn light" data-act="archExport" ${A.loaded ? '' : 'disabled'}>Export Excel</button></div>
+    ${A.errors.length ? `<div class="error">${A.errors.length} archived/template project(s) could not be read.</div>` : ''}
+    <div class="stats compact"><div class="stat"><span>Archived/template projects</span><b>${A.projects.length}</b></div><div class="stat"><span>Memberships found</span><b>${A.members.length}</b></div><div class="stat"><span>Companies found</span><b>${companiesFound.size}</b></div><div class="stat"><span>Unreadable projects</span><b>${A.errors.length}</b></div></div>
+    <h3>Projects</h3><div class="bar"><button class="btn soft" data-act="archSelectProjects">Select All Filtered</button><button class="btn light" data-act="archClearProjects">Deselect All</button><span class="badge">${A.pSel.size} selected</span><button class="btn" data-act="archLoadMembers" ${A.pSel.size ? '' : 'disabled'}>Load Companies & Members</button></div>
+    ${tbl(['Select','Project','Status','Classification','Platform','Project ID'], projects.map((p)=>[rowBox('archProjSel',p.id,A.pSel.has(p.id)),esc(p.name),esc(p.status),esc(p.classification),esc(p.platform),esc(p.id)]),'No archived, inactive, closed or template projects were returned.')}
+  </div>
+  <div class="card"><h3>Company summary</h3>${tbl(['Company','Members found','Projects found'],[...companiesFound.values()].map((c)=>[esc(c.name),c.members,c.projects.size]),'Load members from selected projects.')}</div>
+  <div class="card"><h3>Archived project members</h3><div class="bar"><button class="btn soft" data-act="archSelectMembers">Select All Filtered</button><button class="btn light" data-act="archClearMembers">Deselect All</button><span class="badge">${A.mSel.size} selected</span><div class="grow">${comboHtml('__archTarget','Choose replacement company...')}</div><button class="btn" data-act="archMove" ${A.mSel.size ? '' : 'disabled'}>Change Company</button><button class="btn danger" data-act="archRemove" ${A.mSel.size ? '' : 'disabled'}>Remove From Projects</button></div>
+    ${tbl(['Select','Project','Status','Platform','Member','Email','Company','Member status','Roles'],members.map((m)=>[rowBox('archMemSel',m.key,A.mSel.has(m.key)),esc(m.projectName),esc(m.projectStatus),esc(m.projectPlatform),esc(m.name),esc(m.email),esc(m.company),esc(m.status),esc(roleNames(m.roles))]),'No archived-project memberships loaded.')}
+  </div>`;
+};
+async function loadArchived() {
+  await loadProjects(true);
+  const A=S.archived; A.projects=S.projects.filter(isArchivedProject); A.members=[]; A.errors=[]; A.pSel=new Set(A.projects.map((p)=>p.id)); A.mSel.clear(); A.loaded=true; renderView();
+}
+async function archLoadMembers() {
+  const A=S.archived, ps=A.projects.filter((p)=>A.pSel.has(p.id)); if(!ps.length)return;
+  A.running=true; const out=[],errors=[];
+  for(let i=0;i<ps.length;i+=10){const d=await api('project-users-batch',{body:{projects:ps.slice(i,i+10)}});out.push(...d.items);errors.push(...d.errors);setQueue(`Archived project scan: ${Math.min(i+10,ps.length)} of ${ps.length}`,100*Math.min(i+10,ps.length)/ps.length);}
+  A.members=[...new Map(out.map((m)=>[m.key,m])).values()];A.errors=errors;A.mSel.clear();A.running=false;setQueue(null);renderView();
+}
+async function archMove(){const A=S.archived,target=companyById(S.pick.__archTarget),items=A.members.filter((m)=>A.mSel.has(m.key));if(!target)return showError('Choose the replacement company.');if(target.isHostCompany)return showError('The Host company cannot be used as a cleanup target.');if(!items.length)return;if(!confirm(`Change ${items.length} archived-project membership(s) to "${target.name}"?`))return;const out=[];for(let i=0;i<items.length;i+=20)out.push(...(await api('members-bulk',{body:{operation:'company',companyId:target.id,items:items.slice(i,i+20)}})).results);const ok=new Set(out.filter((r)=>r.success).map((r)=>r.key));A.members.forEach((m)=>{if(ok.has(m.key)){m.companyId=target.id;m.company=target.name;}});A.mSel.clear();pushReports(out.map((r)=>({Type:'Archived member company',Name:r.email,Project:r.projectName,Result:r.success?'Success':'Failed',Detail:r.success?`-> ${target.name}`:r.error})));flash(`${ok.size} archived-project memberships changed.`);renderView();}
+async function archRemove(){const A=S.archived,items=A.members.filter((m)=>A.mSel.has(m.key));if(!items.length||!confirm(`Remove ${items.length} membership(s) from archived/template projects?`))return;const out=await removeMemberships(items,'Archived project removal'),ok=new Set(out.filter((r)=>r.success).map((r)=>r.key));A.members=A.members.filter((m)=>!ok.has(m.key));A.mSel.clear();flash(`${ok.size} archived-project memberships removed.`);renderView();}
+function archExport(){exportRows('Archived_Project_Companies_Members.xlsx',S.archived.members.map((m)=>({Project:m.projectName,'Project status':m.projectStatus,Platform:m.projectPlatform,Member:m.name,Email:m.email,Company:m.company,'Company ID':m.companyId,'Member status':m.status,Roles:roleNames(m.roles),'Project ID':m.projectId})),'Archived Members');}
 
 /* -------------------------------------------------------- user removal */
 VIEWS.user = () => {
@@ -1542,6 +1582,9 @@ const ACT = {
   bulkPreview: () => { if (!companyById(S.pick.__bulkUser)) return showError('Choose the target company from the drop-down.'); S.bulk.preview = true; renderView(); }, bulkApply,
   jobPreview, jobApply,
   exportJobs: () => exportRows('Job_Number_Preview.xlsx', S.jobs.preview.map((p) => ({ Project: p.name, 'Current job number': p.jobNumber, 'Proposed job number': p.proposed, Check: p.msg })), 'Preview'),
+  loadArchived, archLoadMembers, archMove, archRemove, archExport,
+  archSelectProjects: () => { archivedProjectRows().forEach((p)=>S.archived.pSel.add(p.id)); renderView(); }, archClearProjects: () => { S.archived.pSel.clear(); renderView(); },
+  archSelectMembers: () => { S.archived.members.forEach((m)=>S.archived.mSel.add(m.key)); renderView(); }, archClearMembers: () => { S.archived.mSel.clear(); renderView(); },
   buildRegister,
   exportReports: () => exportRows('Action_Log.xlsx', S.reports, 'Log'),
   clearReports: () => { S.reports = []; renderView(); }
@@ -1564,11 +1607,14 @@ const IN = {
   xdelSearch: (el) => { S.xdel.search = el.value; S.xdel.limit = PAGE_STEP; rerender(); },
   addrSearch: (el) => { S.addr.search = el.value; S.addr.limit = PAGE_STEP; rerender(); },
   auditSearch: (el) => { S.audit.search = el.value; debouncedAudit(); },
-  moveSearch: (el) => { S.move.search = el.value; debouncedMove(); }
+  moveSearch: (el) => { S.move.search = el.value; debouncedMove(); },
+  archSearch: (el) => { S.archived.search = el.value; rerender(); }
 };
 const CH = {
   hub: (el) => { S.hub = el.value; S.companies = []; S.companiesLoaded = false; S.projects = []; S.projectsLoaded = false; S.user.users = []; S.user.loaded = false; S.access.members = []; S.pick = {}; S.abn.rows = []; S.abn.sel.clear(); if (S.xdel.raw.length) xdelMatch(); S.addr.rows = []; S.addr.sel.clear(); renderView(); },
   row: (el) => {
+    if (el.dataset.set === 'archProjSel') { if (el.checked) S.archived.pSel.add(el.dataset.id); else S.archived.pSel.delete(el.dataset.id); renderView(); return; }
+    if (el.dataset.set === 'archMemSel') { if (el.checked) S.archived.mSel.add(el.dataset.id); else S.archived.mSel.delete(el.dataset.id); renderView(); return; }
     const set = SETS()[el.dataset.set];
     if (el.checked) set.add(el.dataset.id); else set.delete(el.dataset.id);
     if (el.dataset.set === 'bulkSel') S.bulk.preview = false;

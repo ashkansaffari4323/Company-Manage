@@ -1,0 +1,2 @@
+# Company Manage v41
+Archived project company/member cleanup and Host company protection.
