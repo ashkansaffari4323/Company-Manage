@@ -867,15 +867,30 @@ function auditFinalHtml(st) {
   const q = (st.search || '').toLowerCase();
   const members = st.members.filter((m) => hasText([m.projectName, m.projectStatus, m.name, m.email, m.status, roleNames(m.roles)], q));
   const byProject = new Map();
-  members.forEach((m) => byProject.set(m.projectId, { name: m.projectName, status: m.projectStatus, count: (byProject.has(m.projectId) ? byProject.get(m.projectId).count : 0) + 1 }));
+  members.forEach((m) => byProject.set(m.projectId, { name: m.projectName, status: m.projectStatus, platform: m.projectPlatform || '', count: (byProject.has(m.projectId) ? byProject.get(m.projectId).count : 0) + 1 }));
+  const hubUsers = st.hubUsers || [];
+  const staleMembers = Math.max(0, Number(st.company.members || 0) - st.members.length);
+  const staleProjects = Math.max(0, Number(st.company.projects || 0) - byProject.size);
+  const safe = !st.members.length && !hubUsers.length && !st.errors.length;
   return `<div class="bar"><h3 class="grow">${esc(st.company.name)}</h3><span class="badge good">100% loaded - ${st.total} projects checked</span><button class="btn light" data-act="closeModal">Close</button></div>
-    ${st.errors.length ? `<div class="error">${st.errors.length} project(s) could not be read. Results may be incomplete.</div>` : ''}
+    ${st.errors.length ? `<div class="error">${st.errors.length} project(s) could not be read. Deletion is blocked until these projects can be checked.</div>` : ''}
+    <div class="stats compact">
+      <div class="stat"><span>Directory counter</span><b>${st.company.members || 0} / ${st.company.projects || 0}</b><small>members / projects reported by Autodesk</small></div>
+      <div class="stat"><span>Found memberships</span><b>${st.members.length}</b><small>across ${byProject.size} accessible projects</small></div>
+      <div class="stat"><span>Hub default users</span><b>${hubUsers.length}</b><small>users whose Hub company is this company</small></div>
+      <div class="stat"><span>Unresolved counter</span><b>${staleMembers} / ${staleProjects}</b><small>${staleMembers || staleProjects ? 'likely archived, inaccessible, legacy or stale Autodesk references' : 'fully reconciled'}</small></div>
+    </div>
+    <div class="notice"><b>Dependency result:</b> ${safe ? 'No visible project membership, Hub-default user or unreadable project remains. The company can be safely marked deleted.' : 'Resolve the records below before deletion.'}</div>
     <div class="bar"><input id="auditSearch" class="input grow" data-in="auditSearch" placeholder="Search projects, members, email, role or status" value="${esc(st.search || '')}">
       <button class="btn soft" data-act="auditSelectAll">Select All Filtered</button><button class="btn light" data-act="auditClear">Deselect All</button>
       <span class="badge">${st.sel.size} selected</span><button class="btn danger" data-act="auditRemove" ${st.sel.size ? '' : 'disabled'}>Remove Selected From Projects</button>
       <button class="btn light" data-act="auditExport">Export Excel</button></div>
-    <h4>Projects (${byProject.size})</h4>${tbl(['Project', 'Status', 'Members from this company'], [...byProject.values()].map((p) => [esc(p.name), esc(p.status), p.count]), 'No project memberships found for this company.')}
-    <h4>Members (${members.length})</h4>${tbl(['Select', 'Project', 'Member', 'Email', 'Status', 'Roles'], members.slice(0, 600).map((m) => [`<input type="checkbox" data-ch="auditRow" data-key="${esc(m.key)}" ${st.sel.has(m.key) ? 'checked' : ''}>`, esc(m.projectName), esc(m.name), esc(m.email), esc(m.status), esc(roleNames(m.roles))]), 'No members.')}`;
+    <h4>Project memberships (${byProject.size})</h4>${tbl(['Project', 'Status', 'Platform', 'Members from this company'], [...byProject.values()].map((p) => [esc(p.name), esc(p.status), esc(p.platform), p.count]), 'No accessible project memberships found for this company.')}
+    <h4>Members (${members.length})</h4>${tbl(['Select', 'Project', 'Member', 'Email', 'Status', 'Roles'], members.slice(0, 600).map((m) => [`<input type="checkbox" data-ch="auditRow" data-key="${esc(m.key)}" ${st.sel.has(m.key) ? 'checked' : ''}>`, esc(m.projectName), esc(m.name), esc(m.email), esc(m.status), esc(roleNames(m.roles))]), 'No project members.')}
+    <h4>Hub default-company users (${hubUsers.length})</h4>
+    ${hubUsers.length ? `<div class="bar"><div class="grow">${comboHtml('__auditTarget', 'Choose another company for these Hub users...', st.company.id)}</div><button class="btn" data-act="auditMoveHub">Change ${hubUsers.length} Hub default${hubUsers.length === 1 ? '' : 's'}</button></div>` : ''}
+    ${tbl(['User', 'Email', 'Status', 'Current company'], hubUsers.map((u) => [esc(u.name), esc(u.email), esc(u.status), esc(u.company)]), 'No Hub users use this as their default company.')}
+    <div class="dangerbox"><div class="bar"><b>Delete company</b><span class="muted small">Autodesk exposes this as status “deleted”; it is not a physical database erase.</span><button class="btn danger" data-act="auditPurge" ${safe ? '' : 'disabled'}>Mark Company Deleted</button></div></div>`;
 }
 function paintModalKeepScroll(html) {
   const box = $('.modalbox'), top = box ? box.scrollTop : 0;
@@ -885,13 +900,15 @@ function paintModalKeepScroll(html) {
 const paintAudit = () => paintModalKeepScroll(auditFinalHtml(S.audit));
 async function runAudit(id) {
   const c = companyById(id);
-  const st = { company: c, members: [], errors: [], search: '', checked: 0, total: 0, sel: new Set(), cancelled: false };
+  const st = { company: c, members: [], hubUsers: [], errors: [], search: '', checked: 0, total: 0, sel: new Set(), cancelled: false };
   S.audit = st;
   openModal(`<div class="bar"><h3 class="grow">${esc(c.name)}</h3><button class="btn light" data-act="closeModal">Close</button></div><div class="notice" id="auditProg">${auditProgressHtml(st)}</div>`, true);
   try {
     const { found, errors } = await scanMemberships([id], (checked, total) => { st.checked = checked; st.total = total; const el = $('#auditProg'); if (!st.cancelled && el) el.innerHTML = auditProgressHtml(st); });
     if (st.cancelled) return;
     st.members = found; st.errors = errors; st.total = S.projects.length; st.checked = st.total;
+    if (!S.user.loaded) { S.busyLock = false; await loadHubUsers(); }
+    st.hubUsers = S.user.users.filter((u) => u.companyId === id || (!u.companyId && norm(u.company) === norm(c.name)));
     paintAudit();
   } catch (e) { if (!st.cancelled) { closeModal(); showError(e.message); } }
 }
@@ -905,6 +922,34 @@ async function removeMemberships(items, label) {
   pushReports(out.map((r) => ({ Type: `${label} (remove member)`, Name: r.email || r.name, Project: r.projectName, Result: r.success ? 'Success' : 'Failed', Detail: r.error || '' })));
   return out;
 }
+async function auditMoveHub() {
+  const st = S.audit, target = companyById(S.pick.__auditTarget);
+  if (!target) return showError('Choose the replacement company for the Hub users.');
+  if (!st.hubUsers.length) return;
+  if (!confirm(`Change ${st.hubUsers.length} Hub user default compan${st.hubUsers.length === 1 ? 'y' : 'ies'} to "${target.name}"?`)) return;
+  const all = [];
+  for (let i = 0; i < st.hubUsers.length; i += 25) {
+    const d = await api('bulk-user-company', { body: { hubId: S.hub, companyId: target.id, companyName: target.name, users: st.hubUsers.slice(i, i + 25) } });
+    all.push(...d.results);
+  }
+  const ok = new Set(all.filter((r) => r.success).map((r) => r.id));
+  S.user.users.forEach((u) => { if (ok.has(u.id)) { u.company = target.name; u.companyId = target.id; } });
+  st.hubUsers = st.hubUsers.filter((u) => !ok.has(u.id));
+  pushReports(all.map((r) => ({ Type: 'Company audit (Hub default)', Name: r.email, Result: r.success ? 'Success' : 'Failed', Detail: r.success ? `-> ${target.name}` : r.error })));
+  delete S.pick.__auditTarget;
+  flash(`${ok.size} Hub default compan${ok.size === 1 ? 'y' : 'ies'} changed.`); paintAudit();
+}
+async function auditPurge() {
+  const st = S.audit;
+  if (st.members.length || st.hubUsers.length || st.errors.length) return showError('Resolve all project memberships, Hub users and scan errors first.');
+  if (prompt(`Mark "${st.company.name}" as deleted in Autodesk?\n\nType DELETE COMPANY to continue.`) !== 'DELETE COMPANY') return;
+  const d = await api('companies-purge', { body: { hubId: S.hub, companies: [{ id: st.company.id, name: st.company.name }] } });
+  const r = d.results && d.results[0];
+  pushReports([{ Type: 'Company audit (delete company)', Name: st.company.name, Result: r && r.success ? 'Success' : 'Failed', Detail: r && r.error || '' }]);
+  if (r && r.success) { S.companies = S.companies.filter((c) => c.id !== st.company.id); S.cSel.delete(st.company.id); closeModal(); flash('Company marked deleted.'); renderView(); }
+  else showError((r && r.error) || 'Autodesk did not delete the company.');
+}
+
 async function auditRemove() {
   const st = S.audit, items = st.members.filter((m) => st.sel.has(m.key));
   if (!items.length || !confirm(`Remove ${items.length} project membership(s)? This cannot be undone.`)) return;
@@ -1486,7 +1531,7 @@ const ACT = {
   erpTemplate: () => exportRows('ERP_Tax_Update_Template.xlsx', ERP_TEMPLATE, 'Template'),
   audit: (el) => runAudit(el.dataset.id),
   auditSelectAll: () => { const st = S.audit; st.members.filter((m) => hasText([m.projectName, m.projectStatus, m.name, m.email, m.status, roleNames(m.roles)], (st.search || '').toLowerCase())).forEach((m) => st.sel.add(m.key)); paintAudit(); },
-  auditClear: () => { S.audit.sel.clear(); paintAudit(); }, auditRemove,
+  auditClear: () => { S.audit.sel.clear(); paintAudit(); }, auditRemove, auditMoveHub, auditPurge,
   auditExport: () => exportRows(`${S.audit.company.name.slice(0, 20)}_members.xlsx`, S.audit.members.map((m) => ({ Project: m.projectName, 'Project status': m.projectStatus, Member: m.name, Email: m.email, Status: m.status, Roles: roleNames(m.roles) })), 'Members'),
   importTemplate, runImport,
   exportImportPreview: () => exportRows('Import_Validation.xlsx', S.imp.rows.map((r) => ({ Row: r.row, Status: r.status, ...r.data })), 'Validation'),

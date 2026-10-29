@@ -21,3 +21,12 @@ All earlier features retained.
 - Matches Supplier ID / S Code to Hub ERP ID.
 - Supports Supplier List multiline addresses and clean template.
 - Preview, select, export comparison, typed confirmation and AUS regional update.
+
+## v40: Deep company dependency resolution
+- Company audit now reconciles Autodesk directory counters against accessible project memberships.
+- Shows project status and platform, including archived/template projects returned by Autodesk.
+- Finds Hub users whose default company still points to the selected company.
+- Allows Hub default-company reassignment directly from the audit.
+- Identifies unresolved/stale directory counters separately from visible members.
+- Blocks deletion while project scan errors, project memberships, or Hub-default users remain.
+- Allows a guarded Autodesk soft-delete only after the audit is clear.
